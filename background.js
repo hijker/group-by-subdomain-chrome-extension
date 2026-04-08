@@ -88,13 +88,67 @@ function getDisplayName(key) {
 }
 
 /**
- * Get the next color for a new group
- * @returns {string} - Color name
+ * Get a color that doesn't conflict with adjacent groups
+ * @param {number} windowId - The window ID
+ * @param {number} tabIndex - The index of the tab being grouped
+ * @returns {Promise<string>} - Color name
  */
-function getNextColor() {
-  const color = GROUP_COLORS[colorIndex % GROUP_COLORS.length];
-  colorIndex++;
-  return color;
+async function getSmartColor(windowId, tabIndex) {
+  try {
+    // Get all groups in the window
+    const groups = await chrome.tabGroups.query({ windowId });
+
+    if (groups.length === 0) {
+      return GROUP_COLORS[0];
+    }
+
+    // Get all tabs to understand group positions
+    const tabs = await chrome.tabs.query({ windowId });
+
+    // Find adjacent group colors based on tab position
+    let prevGroupColor = null;
+    let nextGroupColor = null;
+
+    // Look backwards for previous group
+    for (let i = tabIndex - 1; i >= 0; i--) {
+      if (tabs[i] && tabs[i].groupId !== chrome.tabGroups.TAB_GROUP_ID_NONE) {
+        const group = groups.find(g => g.id === tabs[i].groupId);
+        if (group) {
+          prevGroupColor = group.color;
+          break;
+        }
+      }
+    }
+
+    // Look forwards for next group
+    for (let i = tabIndex + 1; i < tabs.length; i++) {
+      if (tabs[i] && tabs[i].groupId !== chrome.tabGroups.TAB_GROUP_ID_NONE) {
+        const group = groups.find(g => g.id === tabs[i].groupId);
+        if (group) {
+          nextGroupColor = group.color;
+          break;
+        }
+      }
+    }
+
+    // Find a color that's different from both neighbors
+    const availableColors = GROUP_COLORS.filter(c => c !== prevGroupColor && c !== nextGroupColor);
+
+    if (availableColors.length > 0) {
+      // Pick a random color from available ones for variety
+      return availableColors[Math.floor(Math.random() * availableColors.length)];
+    }
+
+    // Fallback: just pick one different from immediate previous
+    const fallbackColors = GROUP_COLORS.filter(c => c !== prevGroupColor);
+    return fallbackColors.length > 0 ? fallbackColors[0] : GROUP_COLORS[0];
+
+  } catch (e) {
+    // Fallback to simple rotation
+    const color = GROUP_COLORS[colorIndex % GROUP_COLORS.length];
+    colorIndex++;
+    return color;
+  }
 }
 
 /**
@@ -161,10 +215,13 @@ async function groupTab(tab, force = false) {
       // Create new group
       groupId = await chrome.tabs.group({ tabIds: tab.id });
 
+      // Get a color that doesn't conflict with adjacent groups
+      const color = await getSmartColor(tab.windowId, tab.index);
+
       // Update group properties
       await chrome.tabGroups.update(groupId, {
         title: getDisplayName(key),
-        color: getNextColor(),
+        color: color,
         collapsed: settings.collapseGroups
       });
 
@@ -221,9 +278,14 @@ async function groupAllTabsInWindow(windowId, force = false) {
         // Create new group
         groupId = await chrome.tabs.group({ tabIds });
 
+        // Get a color that doesn't conflict with adjacent groups
+        // Use the first tab's index as reference
+        const firstTabIndex = keyTabs[0].index;
+        const color = await getSmartColor(windowId, firstTabIndex);
+
         await chrome.tabGroups.update(groupId, {
           title: getDisplayName(key),
-          color: getNextColor(),
+          color: color,
           collapsed: settings.collapseGroups
         });
 
@@ -263,24 +325,24 @@ async function ungroupAllTabs() {
 
 // Event Listeners
 
-// Tab created
+// Tab created - always move to correct group based on URL
 chrome.tabs.onCreated.addListener((tab) => {
   // Wait a bit for the URL to be set
   setTimeout(() => {
-    chrome.tabs.get(tab.id).then(groupTab).catch(() => { });
+    chrome.tabs.get(tab.id).then((t) => groupTab(t, true)).catch(() => { });
   }, 100);
 });
 
-// Tab updated (URL changed)
+// Tab updated (URL changed) - always move to correct group based on new URL
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.url) {
-    groupTab(tab);
+    groupTab(tab, true);
   }
 });
 
-// Tab attached to window
+// Tab attached to window - always move to correct group
 chrome.tabs.onAttached.addListener((tabId, attachInfo) => {
-  chrome.tabs.get(tabId).then(groupTab).catch(() => { });
+  chrome.tabs.get(tabId).then((t) => groupTab(t, true)).catch(() => { });
 });
 
 // Group removed - clean up cache
@@ -292,6 +354,80 @@ chrome.tabGroups.onRemoved.addListener((group) => {
       break;
     }
   }
+});
+
+/**
+ * Update color of a group if it conflicts with adjacent groups
+ * @param {number} groupId - The group ID to check
+ * @param {number} windowId - The window ID
+ */
+async function updateGroupColorIfNeeded(groupId, windowId) {
+  try {
+    const groups = await chrome.tabGroups.query({ windowId });
+    const tabs = await chrome.tabs.query({ windowId });
+
+    // Sort groups by their first tab's position
+    const groupPositions = [];
+    for (const group of groups) {
+      const firstTab = tabs.find(t => t.groupId === group.id);
+      if (firstTab) {
+        groupPositions.push({ group, index: firstTab.index });
+      }
+    }
+    groupPositions.sort((a, b) => a.index - b.index);
+
+    // Find the moved group and its neighbors
+    const movedIndex = groupPositions.findIndex(gp => gp.group.id === groupId);
+    if (movedIndex === -1) return;
+
+    const movedGroup = groupPositions[movedIndex].group;
+    const prevGroup = movedIndex > 0 ? groupPositions[movedIndex - 1].group : null;
+    const nextGroup = movedIndex < groupPositions.length - 1 ? groupPositions[movedIndex + 1].group : null;
+
+    // Check if color conflicts with neighbors
+    const hasConflict =
+      (prevGroup && prevGroup.color === movedGroup.color) ||
+      (nextGroup && nextGroup.color === movedGroup.color);
+
+    if (hasConflict) {
+      // Find a color that doesn't conflict
+      const usedColors = [prevGroup?.color, nextGroup?.color].filter(Boolean);
+      const availableColors = GROUP_COLORS.filter(c => !usedColors.includes(c));
+
+      if (availableColors.length > 0) {
+        const newColor = availableColors[Math.floor(Math.random() * availableColors.length)];
+        await chrome.tabGroups.update(groupId, { color: newColor });
+      }
+    }
+  } catch (e) {
+    console.error('Error updating group color:', e);
+  }
+}
+
+// Debounce timer for group moves
+let groupMoveTimeout = null;
+
+// Tab moved - check if group colors need updating
+chrome.tabs.onMoved.addListener((tabId, moveInfo) => {
+  // Debounce to avoid multiple updates during drag
+  clearTimeout(groupMoveTimeout);
+  groupMoveTimeout = setTimeout(async () => {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      if (tab.groupId !== chrome.tabGroups.TAB_GROUP_ID_NONE) {
+        await updateGroupColorIfNeeded(tab.groupId, tab.windowId);
+      }
+    } catch (e) { }
+  }, 300);
+});
+
+// Group updated - check colors when group properties change
+chrome.tabGroups.onUpdated.addListener((group) => {
+  // Debounce to avoid rapid updates
+  clearTimeout(groupMoveTimeout);
+  groupMoveTimeout = setTimeout(() => {
+    updateGroupColorIfNeeded(group.id, group.windowId);
+  }, 300);
 });
 
 // Listen for messages from popup
