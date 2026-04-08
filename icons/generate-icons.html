@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Icon Generator</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    .icon-preview {
+      display: inline-block;
+      margin: 10px;
+      text-align: center;
+    }
+    canvas {
+      border: 1px solid #ddd;
+      background: white;
+    }
+    button {
+      margin-top: 20px;
+      padding: 10px 20px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+    .download-links {
+      margin-top: 20px;
+    }
+    .download-links a {
+      display: block;
+      margin: 5px 0;
+    }
+  </style>
+</head>
+<body>
+  <h1>Tab Grouper Icon Generator</h1>
+  <p>Click the button below to generate and download all icon sizes.</p>
+
+  <div id="previews"></div>
+
+  <button onclick="generateAllIcons()">Generate & Download Icons</button>
+
+  <div class="download-links" id="downloads"></div>
+
+  <script>
+    const sizes = [16, 32, 48, 128];
+
+    function drawIcon(canvas, size) {
+      const ctx = canvas.getContext('2d');
+      const scale = size / 128;
+
+      // Clear canvas
+      ctx.clearRect(0, 0, size, size);
+
+      // Background circle with gradient
+      const gradient = ctx.createLinearGradient(0, 0, size, size);
+      gradient.addColorStop(0, '#4285f4');
+      gradient.addColorStop(1, '#1a73e8');
+
+      ctx.beginPath();
+      ctx.arc(size / 2, size / 2, size * 0.47, 0, Math.PI * 2);
+      ctx.fillStyle = gradient;
+      ctx.fill();
+
+      // Tab rectangles
+      ctx.fillStyle = 'white';
+
+      const tabs = [
+        { y: 32, opacity: 0.95 },
+        { y: 54, opacity: 0.75 },
+        { y: 76, opacity: 0.55 }
+      ];
+
+      tabs.forEach(tab => {
+        ctx.globalAlpha = tab.opacity;
+        roundRect(ctx, 28 * scale, tab.y * scale, 72 * scale, 16 * scale, 4 * scale);
+        ctx.fill();
+      });
+
+      ctx.globalAlpha = 1;
+
+      // Grouping bracket
+      ctx.strokeStyle = 'white';
+      ctx.lineWidth = 4 * scale;
+      ctx.lineCap = 'round';
+
+      ctx.beginPath();
+      ctx.moveTo(22 * scale, 38 * scale);
+      ctx.lineTo(22 * scale, 86 * scale);
+      ctx.moveTo(22 * scale, 62 * scale);
+      ctx.lineTo(16 * scale, 62 * scale);
+      ctx.stroke();
+    }
+
+    function roundRect(ctx, x, y, width, height, radius) {
+      ctx.beginPath();
+      ctx.moveTo(x + radius, y);
+      ctx.lineTo(x + width - radius, y);
+      ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+      ctx.lineTo(x + width, y + height - radius);
+      ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+      ctx.lineTo(x + radius, y + height);
+      ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+      ctx.lineTo(x, y + radius);
+      ctx.quadraticCurveTo(x, y, x + radius, y);
+      ctx.closePath();
+    }
+
+    function createPreviews() {
+      const container = document.getElementById('previews');
+      container.innerHTML = '';
+
+      sizes.forEach(size => {
+        const div = document.createElement('div');
+        div.className = 'icon-preview';
+
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        canvas.id = `icon${size}`;
+
+        drawIcon(canvas, size);
+
+        const label = document.createElement('p');
+        label.textContent = `${size}x${size}`;
+
+        div.appendChild(canvas);
+        div.appendChild(label);
+        container.appendChild(div);
+      });
+    }
+
+    function generateAllIcons() {
+      const downloads = document.getElementById('downloads');
+      downloads.innerHTML = '<h3>Right-click and "Save Link As" to download:</h3>';
+
+      sizes.forEach(size => {
+        const canvas = document.getElementById(`icon${size}`);
+        const dataUrl = canvas.toDataURL('image/png');
+
+        const link = document.createElement('a');
+        link.href = dataUrl;
+        link.download = `icon${size}.png`;
+        link.textContent = `Download icon${size}.png`;
+        downloads.appendChild(link);
+
+        // Auto-download
+        link.click();
+      });
+    }
+
+    // Initialize
+    createPreviews();
+  </script>
+</body>
+</html>

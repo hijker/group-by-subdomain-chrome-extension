@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Package locks (optional for devDependencies only)
+package-lock.json
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Build artifacts
+*.zip
+dist/

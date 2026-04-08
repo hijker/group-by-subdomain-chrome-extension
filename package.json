@@ -1,0 +1,20 @@
+{
+  "name": "tab-grouper-by-subdomain",
+  "version": "1.0.0",
+  "description": "Chrome extension that automatically groups tabs by domain and subdomain into tab groups",
+  "scripts": {
+    "generate-icons": "node scripts/generate-icons.js"
+  },
+  "keywords": [
+    "chrome-extension",
+    "tab-groups",
+    "browser-extension",
+    "productivity"
+  ],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs",
+  "devDependencies": {
+    "canvas": "^3.2.3"
+  }
+}
