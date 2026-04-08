@@ -23,16 +23,20 @@ A Chrome extension that automatically groups tabs by domain and subdomain (up to
 
 ## How It Works
 
-The extension analyzes each tab's URL and extracts the grouping key:
+The extension analyzes each tab's URL and groups by the full hostname. Group names use just the first word (leftmost subdomain or domain name):
 
 | URL | Group Name |
 |-----|------------|
-| `https://mail.google.com/inbox` | Mail.google.com |
-| `https://drive.google.com/files` | Drive.google.com |
-| `https://www.github.com/user/repo` | Github.com |
-| `https://api.github.com/users` | Api.github.com |
-| `https://example.co.uk/page` | Example.co.uk |
+| `https://mail.google.com/inbox` | mail |
+| `https://drive.google.com/files` | drive |
+| `https://grafana.mms.company.com` | grafana |
+| `https://prometheus.mms.company.com` | prometheus |
+| `https://www.github.com/user/repo` | github |
+| `https://api.github.com/users` | api |
+| `https://example.co.uk/page` | example |
 | `https://192.168.1.1/admin` | 192.168.1.1 |
+
+**Note:** Multi-level subdomains like `grafana.mms.company.com` and `prometheus.mms.company.com` are grouped separately, each named by their first word.
 
 ## Installation
 

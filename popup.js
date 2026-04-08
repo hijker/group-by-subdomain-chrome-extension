@@ -8,6 +8,7 @@ const autoGroupToggle = document.getElementById('autoGroup');
 const collapseGroupsToggle = document.getElementById('collapseGroups');
 const ignoreWwwToggle = document.getElementById('ignoreWww');
 const groupAllBtn = document.getElementById('groupAll');
+const forceGroupBtn = document.getElementById('forceGroup');
 const ungroupAllBtn = document.getElementById('ungroupAll');
 const statusEl = document.getElementById('status');
 
@@ -60,20 +61,36 @@ autoGroupToggle.addEventListener('change', saveSettings);
 collapseGroupsToggle.addEventListener('change', saveSettings);
 ignoreWwwToggle.addEventListener('change', saveSettings);
 
-// Group all tabs button
+// Group new tabs button (respects existing groups)
 groupAllBtn.addEventListener('click', async () => {
   groupAllBtn.disabled = true;
   groupAllBtn.textContent = 'Grouping...';
 
   try {
     await chrome.runtime.sendMessage({ action: 'groupAllTabs' });
-    showStatus('All tabs grouped!', 'success');
+    showStatus('Ungrouped tabs organized!', 'success');
   } catch (e) {
     showStatus('Error grouping tabs', 'info');
   }
 
   groupAllBtn.disabled = false;
-  groupAllBtn.textContent = 'Group All Tabs';
+  groupAllBtn.textContent = 'Group New';
+});
+
+// Force regroup all tabs button (overrides existing groups)
+forceGroupBtn.addEventListener('click', async () => {
+  forceGroupBtn.disabled = true;
+  forceGroupBtn.textContent = 'Regrouping...';
+
+  try {
+    await chrome.runtime.sendMessage({ action: 'forceGroupAllTabs' });
+    showStatus('All tabs regrouped!', 'success');
+  } catch (e) {
+    showStatus('Error regrouping tabs', 'info');
+  }
+
+  forceGroupBtn.disabled = false;
+  forceGroupBtn.textContent = 'Regroup All';
 });
 
 // Ungroup all tabs button
@@ -89,7 +106,7 @@ ungroupAllBtn.addEventListener('click', async () => {
   }
 
   ungroupAllBtn.disabled = false;
-  ungroupAllBtn.textContent = 'Ungroup All';
+  ungroupAllBtn.textContent = 'Ungroup';
 });
 
 // Initialize

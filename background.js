@@ -34,21 +34,19 @@ async function saveSettings(newSettings) {
 
 /**
  * Extract the grouping key from a URL
- * Returns subdomain.domain or just domain if no subdomain
+ * Returns the full hostname (handles www prefix based on settings)
  * @param {string} url - The tab URL
  * @returns {string|null} - The grouping key or null for invalid URLs
  */
 function getGroupingKey(url) {
   try {
     const urlObj = new URL(url);
-    const hostname = urlObj.hostname;
+    let hostname = urlObj.hostname;
 
     // Skip chrome:// and other special URLs
     if (!hostname || urlObj.protocol === 'chrome:' || urlObj.protocol === 'chrome-extension:' || urlObj.protocol === 'about:') {
       return null;
     }
-
-    const parts = hostname.split('.');
 
     // Handle IP addresses - group by full IP
     if (/^\d+\.\d+\.\d+\.\d+$/.test(hostname)) {
@@ -60,39 +58,12 @@ function getGroupingKey(url) {
       return 'localhost';
     }
 
-    // Need at least domain.tld
-    if (parts.length < 2) {
-      return hostname;
+    // Handle www prefix based on settings - remove www. from the beginning
+    if (settings.ignoreWww && hostname.startsWith('www.')) {
+      hostname = hostname.substring(4);
     }
 
-    // Common TLDs that have two parts (co.uk, com.au, etc.)
-    const twoPartTlds = ['co.uk', 'com.au', 'co.nz', 'co.jp', 'com.br', 'co.in', 'org.uk', 'net.au'];
-    const lastTwo = parts.slice(-2).join('.');
-    const isTwoPartTld = twoPartTlds.includes(lastTwo);
-
-    let domain, subdomain;
-
-    if (isTwoPartTld && parts.length >= 3) {
-      // For two-part TLDs like co.uk: subdomain.domain.co.uk
-      domain = parts.slice(-3).join('.');
-      subdomain = parts.length > 3 ? parts[parts.length - 4] : null;
-    } else {
-      // Standard TLDs: subdomain.domain.tld
-      domain = parts.slice(-2).join('.');
-      subdomain = parts.length > 2 ? parts[parts.length - 3] : null;
-    }
-
-    // Handle www prefix based on settings
-    if (settings.ignoreWww && subdomain === 'www') {
-      subdomain = null;
-    }
-
-    // Return subdomain.domain if subdomain exists, otherwise just domain
-    if (subdomain) {
-      return `${subdomain}.${domain}`;
-    }
-
-    return domain;
+    return hostname;
   } catch (e) {
     console.error('Error parsing URL:', url, e);
     return null;
@@ -101,12 +72,19 @@ function getGroupingKey(url) {
 
 /**
  * Get display name for a group (clean format)
- * @param {string} key - The grouping key
- * @returns {string} - Display name for the group
+ * Returns the first word of the hostname (subdomain or domain name)
+ * @param {string} key - The grouping key (e.g., "grafana.mms.company.com" or "google.com")
+ * @returns {string} - Display name for the group (e.g., "grafana" or "google")
  */
 function getDisplayName(key) {
-  // Capitalize first letter and clean up
-  return key.charAt(0).toUpperCase() + key.slice(1);
+  // Handle IP addresses and localhost - return as-is
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(key) || key === 'localhost') {
+    return key;
+  }
+
+  // Return the first part (leftmost subdomain or domain name)
+  const parts = key.split('.');
+  return parts[0];
 }
 
 /**
@@ -159,10 +137,16 @@ async function findOrCreateGroup(key, windowId) {
 /**
  * Group a single tab by its URL
  * @param {chrome.tabs.Tab} tab - The tab to group
+ * @param {boolean} force - If true, ignore existing group membership
  */
-async function groupTab(tab) {
+async function groupTab(tab, force = false) {
   if (!settings.enabled || !settings.autoGroup) return;
   if (!tab.url || tab.pinned) return;
+
+  // Respect existing groups - don't move tabs that are already grouped
+  if (!force && tab.groupId !== chrome.tabGroups.TAB_GROUP_ID_NONE) {
+    return;
+  }
 
   const key = getGroupingKey(tab.url);
   if (!key) return;
@@ -196,8 +180,9 @@ async function groupTab(tab) {
 /**
  * Group all tabs in a window
  * @param {number} windowId - The window ID
+ * @param {boolean} force - If true, regroup all tabs ignoring existing groups
  */
-async function groupAllTabsInWindow(windowId) {
+async function groupAllTabsInWindow(windowId, force = false) {
   if (!settings.enabled) return;
 
   const tabs = await chrome.tabs.query({ windowId });
@@ -206,6 +191,11 @@ async function groupAllTabsInWindow(windowId) {
   // Group tabs by their key
   for (const tab of tabs) {
     if (tab.pinned || !tab.url) continue;
+
+    // Respect existing groups - skip tabs that are already grouped (unless force)
+    if (!force && tab.groupId !== chrome.tabGroups.TAB_GROUP_ID_NONE) {
+      continue;
+    }
 
     const key = getGroupingKey(tab.url);
     if (!key) continue;
@@ -248,11 +238,12 @@ async function groupAllTabsInWindow(windowId) {
 
 /**
  * Group all tabs in all windows
+ * @param {boolean} force - If true, regroup all tabs ignoring existing groups
  */
-async function groupAllTabs() {
+async function groupAllTabs(force = false) {
   const windows = await chrome.windows.getAll({ windowTypes: ['normal'] });
   for (const window of windows) {
-    await groupAllTabsInWindow(window.id);
+    await groupAllTabsInWindow(window.id, force);
   }
 }
 
@@ -276,7 +267,7 @@ async function ungroupAllTabs() {
 chrome.tabs.onCreated.addListener((tab) => {
   // Wait a bit for the URL to be set
   setTimeout(() => {
-    chrome.tabs.get(tab.id).then(groupTab).catch(() => {});
+    chrome.tabs.get(tab.id).then(groupTab).catch(() => { });
   }, 100);
 });
 
@@ -289,7 +280,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
 // Tab attached to window
 chrome.tabs.onAttached.addListener((tabId, attachInfo) => {
-  chrome.tabs.get(tabId).then(groupTab).catch(() => {});
+  chrome.tabs.get(tabId).then(groupTab).catch(() => { });
 });
 
 // Group removed - clean up cache
@@ -311,7 +302,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     saveSettings(message.settings).then(() => sendResponse({ success: true }));
     return true; // Async response
   } else if (message.action === 'groupAllTabs') {
-    groupAllTabs().then(() => sendResponse({ success: true }));
+    // Only group ungrouped tabs (respects existing groups)
+    groupAllTabs(false).then(() => sendResponse({ success: true }));
+    return true;
+  } else if (message.action === 'forceGroupAllTabs') {
+    // Force regroup all tabs (ignores existing groups)
+    groupAllTabs(true).then(() => sendResponse({ success: true }));
     return true;
   } else if (message.action === 'ungroupAllTabs') {
     ungroupAllTabs().then(() => sendResponse({ success: true }));
