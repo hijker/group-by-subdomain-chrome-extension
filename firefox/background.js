@@ -6,6 +6,9 @@
 // Store for group IDs mapped to subdomain keys
 const groupCache = new Map();
 
+// Lock mechanism to prevent race conditions when creating groups
+const pendingGroups = new Map(); // key -> Promise
+
 // Color palette for tab groups (Firefox uses same color names as Chrome)
 const GROUP_COLORS = ['blue', 'red', 'yellow', 'green', 'pink', 'purple', 'cyan', 'orange', 'grey'];
 let colorIndex = 0;
@@ -197,24 +200,52 @@ async function groupTab(tab, force = false) {
   const key = getGroupingKey(tab.url);
   if (!key) return;
 
+  const lockKey = `${tab.windowId}-${key}`;
+
   try {
+    // If there's a pending group creation, wait for it
+    if (pendingGroups.has(lockKey)) {
+      await pendingGroups.get(lockKey);
+    }
+
+    // Check if group exists (might have been created while waiting)
     let groupId = await findOrCreateGroup(key, tab.windowId);
 
     if (groupId) {
+      // Add to existing group
       await browser.tabs.group({ tabIds: tab.id, groupId });
     } else {
-      groupId = await browser.tabs.group({ tabIds: tab.id });
+      // Acquire lock for creating the group
+      let resolvePromise;
+      const promise = new Promise(resolve => { resolvePromise = resolve; });
+      pendingGroups.set(lockKey, promise);
 
-      const color = await getSmartColor(tab.windowId, tab.index);
+      try {
+        // Double-check (another call might have created it while we set up lock)
+        groupId = await findOrCreateGroup(key, tab.windowId);
 
-      await browser.tabGroups.update(groupId, {
-        title: getDisplayName(key),
-        color: color,
-        collapsed: settings.collapseGroups
-      });
+        if (groupId) {
+          await browser.tabs.group({ tabIds: tab.id, groupId });
+        } else {
+          // Create new group
+          groupId = await browser.tabs.group({ tabIds: tab.id });
 
-      const cacheKey = `${tab.windowId}-${key}`;
-      groupCache.set(cacheKey, groupId);
+          const color = await getSmartColor(tab.windowId, tab.index);
+
+          await browser.tabGroups.update(groupId, {
+            title: getDisplayName(key),
+            color: color,
+            collapsed: settings.collapseGroups
+          });
+
+          // Cache the new group
+          groupCache.set(lockKey, groupId);
+        }
+      } finally {
+        resolvePromise();
+        // Keep the lock for a short time to catch rapid successive calls
+        setTimeout(() => pendingGroups.delete(lockKey), 300);
+      }
     }
   } catch (e) {
     console.error('Error grouping tab:', e);
@@ -234,6 +265,11 @@ async function groupAllTabsInWindow(windowId, force = false) {
 
   for (const tab of tabs) {
     if (tab.pinned || !tab.url) continue;
+
+    // Skip tabs that are still loading - they'll be grouped when they finish
+    if (tab.status === 'loading' && (!tab.url || tab.url === 'about:blank' || tab.url.startsWith('about:'))) {
+      continue;
+    }
 
     if (!force && tab.groupId !== browser.tabGroups.TAB_GROUP_ID_NONE) {
       continue;
@@ -421,10 +457,22 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-// Initialize
+// Handle first install - wait for tabs to fully load before grouping
+browser.runtime.onInstalled.addListener((details) => {
+  if (details.reason === 'install') {
+    console.log('Tab Grouper by Subdomain (Firefox) installed - waiting for tabs to load...');
+    // Wait longer on first install for all tabs to have their final URLs
+    setTimeout(async () => {
+      await loadSettings();
+      if (settings.autoGroup) {
+        console.log('Grouping existing tabs...');
+        await groupAllTabs();
+      }
+    }, 2000); // 2 second delay for tabs to fully load
+  }
+});
+
+// Initialize on startup (not first install)
 loadSettings().then(() => {
   console.log('Tab Grouper by Subdomain (Firefox) initialized');
-  if (settings.autoGroup) {
-    groupAllTabs();
-  }
 });

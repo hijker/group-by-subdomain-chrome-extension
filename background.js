@@ -6,6 +6,9 @@
 // Store for group IDs mapped to subdomain keys
 const groupCache = new Map();
 
+// Lock mechanism to prevent race conditions when creating groups
+const pendingGroups = new Map(); // key -> Promise
+
 // Color palette for tab groups
 const GROUP_COLORS = ['blue', 'red', 'yellow', 'green', 'pink', 'purple', 'cyan', 'orange', 'grey'];
 let colorIndex = 0;
@@ -189,6 +192,50 @@ async function findOrCreateGroup(key, windowId) {
 }
 
 /**
+ * Get or create a group for the given key with locking to prevent race conditions
+ * @param {string} key - The grouping key
+ * @param {number} windowId - The window ID
+ * @param {number} tabIndex - The tab index for color selection
+ * @returns {Promise<number>} - The group ID
+ */
+async function getOrCreateGroupWithLock(key, windowId, tabIndex) {
+  const lockKey = `${windowId}-${key}`;
+
+  // If there's already a pending operation for this key, wait for it
+  if (pendingGroups.has(lockKey)) {
+    await pendingGroups.get(lockKey);
+    // After waiting, the group should exist - find it
+    const existingGroupId = await findOrCreateGroup(key, windowId);
+    if (existingGroupId) return existingGroupId;
+  }
+
+  // Check if group already exists
+  let groupId = await findOrCreateGroup(key, windowId);
+  if (groupId) return groupId;
+
+  // Create a promise that others can wait on
+  let resolvePromise;
+  const promise = new Promise(resolve => { resolvePromise = resolve; });
+  pendingGroups.set(lockKey, promise);
+
+  try {
+    // Double-check after acquiring lock (another call might have created it)
+    groupId = await findOrCreateGroup(key, windowId);
+    if (groupId) return groupId;
+
+    // Create the group - we use a temporary tab approach
+    // The actual tab will be added by the caller
+    return null; // Signal that caller should create the group
+  } finally {
+    // Clean up the lock after a short delay to handle rapid successive calls
+    setTimeout(() => {
+      pendingGroups.delete(lockKey);
+    }, 500);
+    resolvePromise();
+  }
+}
+
+/**
  * Group a single tab by its URL
  * @param {chrome.tabs.Tab} tab - The tab to group
  * @param {boolean} force - If true, ignore existing group membership
@@ -205,29 +252,54 @@ async function groupTab(tab, force = false) {
   const key = getGroupingKey(tab.url);
   if (!key) return;
 
+  const lockKey = `${tab.windowId}-${key}`;
+
   try {
+    // If there's a pending group creation, wait for it
+    if (pendingGroups.has(lockKey)) {
+      await pendingGroups.get(lockKey);
+    }
+
+    // Check if group exists (might have been created while waiting)
     let groupId = await findOrCreateGroup(key, tab.windowId);
 
     if (groupId) {
       // Add to existing group
       await chrome.tabs.group({ tabIds: tab.id, groupId });
     } else {
-      // Create new group
-      groupId = await chrome.tabs.group({ tabIds: tab.id });
+      // Acquire lock for creating the group
+      let resolvePromise;
+      const promise = new Promise(resolve => { resolvePromise = resolve; });
+      pendingGroups.set(lockKey, promise);
 
-      // Get a color that doesn't conflict with adjacent groups
-      const color = await getSmartColor(tab.windowId, tab.index);
+      try {
+        // Double-check (another call might have created it while we set up lock)
+        groupId = await findOrCreateGroup(key, tab.windowId);
 
-      // Update group properties
-      await chrome.tabGroups.update(groupId, {
-        title: getDisplayName(key),
-        color: color,
-        collapsed: settings.collapseGroups
-      });
+        if (groupId) {
+          await chrome.tabs.group({ tabIds: tab.id, groupId });
+        } else {
+          // Create new group
+          groupId = await chrome.tabs.group({ tabIds: tab.id });
 
-      // Cache the new group
-      const cacheKey = `${tab.windowId}-${key}`;
-      groupCache.set(cacheKey, groupId);
+          // Get a color that doesn't conflict with adjacent groups
+          const color = await getSmartColor(tab.windowId, tab.index);
+
+          // Update group properties
+          await chrome.tabGroups.update(groupId, {
+            title: getDisplayName(key),
+            color: color,
+            collapsed: settings.collapseGroups
+          });
+
+          // Cache the new group
+          groupCache.set(lockKey, groupId);
+        }
+      } finally {
+        resolvePromise();
+        // Keep the lock for a short time to catch rapid successive calls
+        setTimeout(() => pendingGroups.delete(lockKey), 300);
+      }
     }
   } catch (e) {
     console.error('Error grouping tab:', e);
@@ -248,6 +320,11 @@ async function groupAllTabsInWindow(windowId, force = false) {
   // Group tabs by their key
   for (const tab of tabs) {
     if (tab.pinned || !tab.url) continue;
+
+    // Skip tabs that are still loading - they'll be grouped when they finish
+    if (tab.status === 'loading' && (!tab.url || tab.url === 'about:blank' || tab.url.startsWith('chrome://'))) {
+      continue;
+    }
 
     // Respect existing groups - skip tabs that are already grouped (unless force)
     if (!force && tab.groupId !== chrome.tabGroups.TAB_GROUP_ID_NONE) {
@@ -451,11 +528,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-// Initialize
+// Handle first install - wait for tabs to fully load before grouping
+chrome.runtime.onInstalled.addListener((details) => {
+  if (details.reason === 'install') {
+    console.log('Tab Grouper by Subdomain installed - waiting for tabs to load...');
+    // Wait longer on first install for all tabs to have their final URLs
+    setTimeout(async () => {
+      await loadSettings();
+      if (settings.autoGroup) {
+        console.log('Grouping existing tabs...');
+        await groupAllTabs();
+      }
+    }, 2000); // 2 second delay for tabs to fully load
+  }
+});
+
+// Initialize on startup (not first install)
 loadSettings().then(() => {
   console.log('Tab Grouper by Subdomain initialized');
-  // Optionally group existing tabs on install
-  if (settings.autoGroup) {
-    groupAllTabs();
-  }
 });
