@@ -3,15 +3,19 @@
  */
 
 // DOM Elements
+const enabledToggle = document.getElementById('enabled');
+const autoGroupToggle = document.getElementById('autoGroup');
+const collapseGroupsToggle = document.getElementById('collapseGroups');
 const ignoreWwwToggle = document.getElementById('ignoreWww');
-const sortByDomainToggle = document.getElementById('sortByDomain');
-const showTabCountToggle = document.getElementById('showTabCount');
-const openSidebarBtn = document.getElementById('openSidebar');
-const sidebarLink = document.getElementById('sidebarLink');
+const groupAllBtn = document.getElementById('groupAll');
+const forceGroupBtn = document.getElementById('forceGroup');
+const ungroupAllBtn = document.getElementById('ungroupAll');
 const statusEl = document.getElementById('status');
 
 /**
  * Show status message
+ * @param {string} message - The message to show
+ * @param {string} type - 'success' or 'info'
  */
 function showStatus(message, type = 'success') {
   statusEl.textContent = message;
@@ -28,9 +32,10 @@ function showStatus(message, type = 'success') {
 async function loadSettings() {
   const settings = await browser.runtime.sendMessage({ action: 'getSettings' });
 
+  enabledToggle.checked = settings.enabled;
+  autoGroupToggle.checked = settings.autoGroup;
+  collapseGroupsToggle.checked = settings.collapseGroups;
   ignoreWwwToggle.checked = settings.ignoreWww;
-  sortByDomainToggle.checked = settings.sortByDomain;
-  showTabCountToggle.checked = settings.showTabCount;
 }
 
 /**
@@ -38,9 +43,10 @@ async function loadSettings() {
  */
 async function saveSettings() {
   const settings = {
-    ignoreWww: ignoreWwwToggle.checked,
-    sortByDomain: sortByDomainToggle.checked,
-    showTabCount: showTabCountToggle.checked
+    enabled: enabledToggle.checked,
+    autoGroup: autoGroupToggle.checked,
+    collapseGroups: collapseGroupsToggle.checked,
+    ignoreWww: ignoreWwwToggle.checked
   };
 
   await browser.runtime.sendMessage({ action: 'saveSettings', settings });
@@ -50,21 +56,57 @@ async function saveSettings() {
 // Event Listeners
 
 // Toggle changes
+enabledToggle.addEventListener('change', saveSettings);
+autoGroupToggle.addEventListener('change', saveSettings);
+collapseGroupsToggle.addEventListener('change', saveSettings);
 ignoreWwwToggle.addEventListener('change', saveSettings);
-sortByDomainToggle.addEventListener('change', saveSettings);
-showTabCountToggle.addEventListener('change', saveSettings);
 
-// Open sidebar button
-openSidebarBtn.addEventListener('click', () => {
-  browser.sidebarAction.open();
-  window.close();
+// Group new tabs button (respects existing groups)
+groupAllBtn.addEventListener('click', async () => {
+  groupAllBtn.disabled = true;
+  groupAllBtn.textContent = 'Grouping...';
+
+  try {
+    await browser.runtime.sendMessage({ action: 'groupAllTabs' });
+    showStatus('Ungrouped tabs organized!', 'success');
+  } catch (e) {
+    showStatus('Error grouping tabs', 'info');
+  }
+
+  groupAllBtn.disabled = false;
+  groupAllBtn.textContent = 'Group New';
 });
 
-// Sidebar link
-sidebarLink.addEventListener('click', (e) => {
-  e.preventDefault();
-  browser.sidebarAction.open();
-  window.close();
+// Force regroup all tabs button (overrides existing groups)
+forceGroupBtn.addEventListener('click', async () => {
+  forceGroupBtn.disabled = true;
+  forceGroupBtn.textContent = 'Regrouping...';
+
+  try {
+    await browser.runtime.sendMessage({ action: 'forceGroupAllTabs' });
+    showStatus('All tabs regrouped!', 'success');
+  } catch (e) {
+    showStatus('Error regrouping tabs', 'info');
+  }
+
+  forceGroupBtn.disabled = false;
+  forceGroupBtn.textContent = 'Regroup All';
+});
+
+// Ungroup all tabs button
+ungroupAllBtn.addEventListener('click', async () => {
+  ungroupAllBtn.disabled = true;
+  ungroupAllBtn.textContent = 'Ungrouping...';
+
+  try {
+    await browser.runtime.sendMessage({ action: 'ungroupAllTabs' });
+    showStatus('All tabs ungrouped!', 'success');
+  } catch (e) {
+    showStatus('Error ungrouping tabs', 'info');
+  }
+
+  ungroupAllBtn.disabled = false;
+  ungroupAllBtn.textContent = 'Ungroup';
 });
 
 // Initialize

@@ -1,35 +1,38 @@
 # Tab Grouper by Subdomain (Firefox)
 
-A Firefox extension that groups tabs by domain and subdomain in a sidebar view. This is the Firefox alternative to Chrome's native tab groups feature.
+A Firefox extension that automatically groups tabs by domain and subdomain into Firefox's native tab groups.
 
 ![Tab Grouper Icon](icons/icon128.png)
 
+## Requirements
+
+- **Firefox 131+** (Tab Groups API required)
+
 ## Features
 
-- **Sidebar Tab Groups View**: Visual representation of tabs grouped by domain/subdomain
-- **Smart Grouping**: Automatically groups tabs by hostname
-- **Color-coded Groups**: Each group gets a unique color (avoids adjacent conflicts)
-- **Collapsible Groups**: Click to expand/collapse tab groups
-- **Quick Actions**:
-  - Click a tab to switch to it
-  - Close individual tabs
-  - Move all tabs from a group together
-  - Close all tabs in a group
-- **Settings**:
-  - Ignore "www" prefix
-  - Sort groups alphabetically
-  - Show tab count badges
+- **Automatic Tab Grouping**: Tabs are automatically grouped as you browse
+- **Native Tab Groups**: Uses Firefox's built-in tab groups (visible in tab bar)
+- **Smart Grouping**: Groups tabs by the full hostname
+- **First Word Naming**: Group names use just the first word (subdomain or domain)
+- **Smart Colors**: Adjacent groups get different colors automatically
+- **Color Updates on Move**: Colors adjust when you drag groups around
+- **Customizable Settings**:
+  - Enable/disable extension
+  - Toggle auto-grouping for new tabs
+  - Collapse new groups automatically
+  - Ignore "www" prefix option
+- **Manual Controls**: Group all tabs, regroup, or ungroup with one click
 
 ## How It Works
-
-Since Firefox doesn't have native tab groups like Chrome, this extension provides a **sidebar panel** that displays your tabs organized by domain/subdomain:
 
 | URL | Group Name |
 |-----|------------|
 | `mail.google.com` | mail |
 | `drive.google.com` | drive |
 | `grafana.mms.company.com` | grafana |
+| `prometheus.mms.company.com` | prometheus |
 | `github.com` | github |
+| `www.example.com` | example |
 
 ## Installation
 
@@ -39,7 +42,7 @@ Since Firefox doesn't have native tab groups like Chrome, this extension provide
 2. Click "This Firefox" in the left sidebar
 3. Click "Load Temporary Add-on..."
 4. Navigate to the `firefox` folder and select `manifest.json`
-5. The extension will be loaded temporarily (until Firefox restarts)
+5. The extension will be loaded (until Firefox restarts)
 
 ### Permanent Installation
 
@@ -49,46 +52,38 @@ Since Firefox doesn't have native tab groups like Chrome, this extension provide
    zip -r tab-grouper-firefox.xpi *
    ```
 
-2. For personal use:
-   - Go to `about:addons`
-   - Click the gear icon → "Install Add-on From File..."
-   - Select the `.xpi` file
-
-3. For distribution:
-   - Submit to [Firefox Add-ons](https://addons.mozilla.org/)
+2. Submit to [Firefox Add-ons](https://addons.mozilla.org/) for signing
 
 ## Usage
 
-### Opening the Sidebar
+### Automatic Grouping
 
-1. **Click the extension icon** in the toolbar and click "Open Tab Groups Sidebar"
-2. **Or** use keyboard shortcut: `Ctrl+Shift+Y` (customizable in Firefox settings)
-3. **Or** go to View → Sidebar → Tab Groups
+Once installed, the extension automatically:
+- Groups new tabs based on their URL
+- Moves tabs to the correct group when URL changes
+- Assigns non-conflicting colors to adjacent groups
 
-### Sidebar Controls
+### Popup Controls
 
-- **Click group header**: Expand/collapse the group
-- **Click tab**: Switch to that tab
-- **× button on tab**: Close the tab
-- **⊞ button**: Move all tabs in the group together
-- **⋯ button**: More options (close others, close all)
-- **Collapse All / Expand All**: Header buttons to control all groups
+Click the extension icon to access:
 
-### Settings (via popup)
+**Settings:**
+- **Enable Extension**: Turn tab grouping on/off
+- **Auto-group New Tabs**: Automatically group tabs as they open
+- **Collapse New Groups**: Start new groups in collapsed state
+- **Ignore "www" Prefix**: Treat www.site.com same as site.com
 
-Click the extension icon to access settings:
-- **Ignore "www" Prefix**: Treat `www.site.com` same as `site.com`
-- **Sort by Domain**: Alphabetically sort groups
-- **Show Tab Count**: Display number of tabs per group
+**Actions:**
+- **Group New**: Groups only ungrouped tabs (respects existing groups)
+- **Regroup All**: Forces all tabs to be regrouped by subdomain
+- **Ungroup**: Removes all tab groups
 
 ## File Structure
 
 ```
 firefox/
 ├── manifest.json       # Firefox extension manifest (v2)
-├── background.js       # Background script for tab management
-├── sidebar.html        # Sidebar panel UI
-├── sidebar.js          # Sidebar functionality
+├── background.js       # Background script (tab grouping logic)
 ├── popup.html          # Settings popup UI
 ├── popup.js            # Popup functionality
 ├── icons/
@@ -102,35 +97,25 @@ firefox/
 ## Permissions
 
 - `tabs`: Access tab information for grouping
-- `storage`: Save settings and group colors
-
-## Differences from Chrome Version
-
-| Feature | Chrome | Firefox |
-|---------|--------|---------|
-| Native Tab Groups | ✅ Yes | ❌ No |
-| Implementation | Uses `chrome.tabGroups` API | Sidebar-based view |
-| Auto-grouping | Automatic | Manual via sidebar |
-| Visual Groups in Tab Bar | ✅ Yes | ❌ No (sidebar only) |
-| Group Actions | Native | Via sidebar context menu |
-
-## Keyboard Shortcuts
-
-You can customize keyboard shortcuts in Firefox:
-1. Go to `about:addons`
-2. Click the gear icon → "Manage Extension Shortcuts"
-3. Find "Tab Grouper by Subdomain" and set your preferred shortcuts
+- `tabGroups`: Create and manage Firefox tab groups
+- `storage`: Save settings
 
 ## Browser Compatibility
 
-- **Firefox**: ✅ Fully supported (91+)
-- **Firefox ESR**: ✅ Should work
-- **Firefox Developer Edition**: ✅ Supported
-- **Firefox Nightly**: ✅ Supported
+- **Firefox 131+**: ✅ Full support (native tab groups)
+- **Firefox < 131**: ❌ Not supported (no tab groups API)
+- **Firefox ESR**: ❌ Not supported (ESR is behind on features)
 
-## Contributing
+## Differences from Chrome Version
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+The Firefox version is functionally identical to the Chrome version, both using native tab groups APIs.
+
+| Feature | Chrome | Firefox |
+|---------|--------|---------|
+| Native Tab Groups | ✅ | ✅ (131+) |
+| Auto-grouping | ✅ | ✅ |
+| Smart Colors | ✅ | ✅ |
+| Respects Existing Groups | ✅ | ✅ |
 
 ## License
 

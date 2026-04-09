@@ -2,9 +2,10 @@
   "manifest_version": 2,
   "name": "Tab Grouper by Subdomain",
   "version": "1.0.0",
-  "description": "Groups tabs by domain and subdomain with a sidebar view. Firefox alternative to Chrome's tab groups.",
+  "description": "Automatically groups tabs by domain and subdomain into Firefox's native tab groups.",
   "permissions": [
     "tabs",
+    "tabGroups",
     "storage"
   ],
   "background": {
@@ -19,14 +20,6 @@
     },
     "default_title": "Tab Grouper by Subdomain"
   },
-  "sidebar_action": {
-    "default_title": "Tab Groups",
-    "default_panel": "sidebar.html",
-    "default_icon": {
-      "16": "icons/icon16.png",
-      "32": "icons/icon32.png"
-    }
-  },
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",
@@ -36,7 +29,7 @@
   "browser_specific_settings": {
     "gecko": {
       "id": "{e5a52d0a-1234-5678-90ab-cdef12345678}",
-      "strict_min_version": "57.0"
+      "strict_min_version": "131.0"
     }
   }
 }

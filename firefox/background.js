@@ -1,41 +1,29 @@
 /**
  * Tab Grouper by Subdomain - Firefox Version
- * Groups tabs by domain and subdomain with sidebar view
+ * Automatically groups tabs by domain and subdomain using Firefox's native tab groups
  */
 
-// Color palette for groups (CSS colors for sidebar display)
-const GROUP_COLORS = [
-  '#4285f4', // blue
-  '#ea4335', // red
-  '#fbbc04', // yellow
-  '#34a853', // green
-  '#ff6d91', // pink
-  '#9334e6', // purple
-  '#00bcd4', // cyan
-  '#ff9800', // orange
-  '#9e9e9e'  // grey
-];
+// Store for group IDs mapped to subdomain keys
+const groupCache = new Map();
+
+// Color palette for tab groups (Firefox uses same color names as Chrome)
+const GROUP_COLORS = ['blue', 'red', 'yellow', 'green', 'pink', 'purple', 'cyan', 'orange', 'grey'];
+let colorIndex = 0;
 
 // Settings with defaults
 let settings = {
   enabled: true,
-  ignoreWww: true,
-  sortByDomain: true,
-  showTabCount: true
+  autoGroup: true,
+  collapseGroups: false,
+  ignoreWww: true
 };
-
-// Color assignments for groups (persisted)
-let groupColors = {};
 
 // Load settings from storage
 async function loadSettings() {
   try {
-    const stored = await browser.storage.sync.get(['settings', 'groupColors']);
+    const stored = await browser.storage.sync.get('settings');
     if (stored.settings) {
       settings = { ...settings, ...stored.settings };
-    }
-    if (stored.groupColors) {
-      groupColors = stored.groupColors;
     }
   } catch (e) {
     console.error('Error loading settings:', e);
@@ -48,13 +36,9 @@ async function saveSettings(newSettings) {
   await browser.storage.sync.set({ settings });
 }
 
-// Save group colors
-async function saveGroupColors() {
-  await browser.storage.sync.set({ groupColors });
-}
-
 /**
  * Extract the grouping key from a URL
+ * Returns the full hostname (handles www prefix based on settings)
  * @param {string} url - The tab URL
  * @returns {string|null} - The grouping key or null for invalid URLs
  */
@@ -88,14 +72,16 @@ function getGroupingKey(url) {
 
     return hostname;
   } catch (e) {
+    console.error('Error parsing URL:', url, e);
     return null;
   }
 }
 
 /**
  * Get display name for a group
+ * Returns the first word of the hostname (subdomain or domain name)
  * @param {string} key - The grouping key
- * @returns {string} - Display name
+ * @returns {string} - Display name for the group
  */
 function getDisplayName(key) {
   if (/^\d+\.\d+\.\d+\.\d+$/.test(key) || key === 'localhost') {
@@ -106,208 +92,339 @@ function getDisplayName(key) {
 }
 
 /**
- * Get color for a group (assigns new color if needed)
- * @param {string} key - The grouping key
- * @param {Array} existingColors - Colors already used by adjacent groups
- * @returns {string} - Color hex value
+ * Get a color that doesn't conflict with adjacent groups
+ * @param {number} windowId - The window ID
+ * @param {number} tabIndex - The index of the tab being grouped
+ * @returns {Promise<string>} - Color name
  */
-function getGroupColor(key, existingColors = []) {
-  if (groupColors[key]) {
-    return groupColors[key];
+async function getSmartColor(windowId, tabIndex) {
+  try {
+    const groups = await browser.tabGroups.query({ windowId });
+
+    if (groups.length === 0) {
+      return GROUP_COLORS[0];
+    }
+
+    const tabs = await browser.tabs.query({ windowId });
+
+    let prevGroupColor = null;
+    let nextGroupColor = null;
+
+    // Look backwards for previous group
+    for (let i = tabIndex - 1; i >= 0; i--) {
+      if (tabs[i] && tabs[i].groupId !== browser.tabGroups.TAB_GROUP_ID_NONE) {
+        const group = groups.find(g => g.id === tabs[i].groupId);
+        if (group) {
+          prevGroupColor = group.color;
+          break;
+        }
+      }
+    }
+
+    // Look forwards for next group
+    for (let i = tabIndex + 1; i < tabs.length; i++) {
+      if (tabs[i] && tabs[i].groupId !== browser.tabGroups.TAB_GROUP_ID_NONE) {
+        const group = groups.find(g => g.id === tabs[i].groupId);
+        if (group) {
+          nextGroupColor = group.color;
+          break;
+        }
+      }
+    }
+
+    // Find a color that's different from both neighbors
+    const availableColors = GROUP_COLORS.filter(c => c !== prevGroupColor && c !== nextGroupColor);
+
+    if (availableColors.length > 0) {
+      return availableColors[Math.floor(Math.random() * availableColors.length)];
+    }
+
+    const fallbackColors = GROUP_COLORS.filter(c => c !== prevGroupColor);
+    return fallbackColors.length > 0 ? fallbackColors[0] : GROUP_COLORS[0];
+
+  } catch (e) {
+    const color = GROUP_COLORS[colorIndex % GROUP_COLORS.length];
+    colorIndex++;
+    return color;
   }
-
-  // Find a color not used by neighbors
-  const availableColors = GROUP_COLORS.filter(c => !existingColors.includes(c));
-  const color = availableColors.length > 0
-    ? availableColors[Math.floor(Math.random() * availableColors.length)]
-    : GROUP_COLORS[Math.floor(Math.random() * GROUP_COLORS.length)];
-
-  groupColors[key] = color;
-  saveGroupColors();
-  return color;
 }
 
 /**
- * Get all tabs grouped by domain/subdomain
- * @param {number} windowId - Optional window ID (current window if not specified)
- * @returns {Promise<Object>} - Groups object with tabs
+ * Find or create a tab group for the given key
+ * @param {string} key - The grouping key
+ * @param {number} windowId - The window ID
+ * @returns {Promise<number>} - The group ID or null
  */
-async function getGroupedTabs(windowId = null) {
-  const queryOptions = windowId ? { windowId } : { currentWindow: true };
-  const tabs = await browser.tabs.query(queryOptions);
+async function findOrCreateGroup(key, windowId) {
+  const cacheKey = `${windowId}-${key}`;
 
-  const groups = {};
-  const groupOrder = [];
+  if (groupCache.has(cacheKey)) {
+    const groupId = groupCache.get(cacheKey);
+    try {
+      await browser.tabGroups.get(groupId);
+      return groupId;
+    } catch (e) {
+      groupCache.delete(cacheKey);
+    }
+  }
+
+  const groups = await browser.tabGroups.query({ windowId });
+  const displayName = getDisplayName(key);
+
+  for (const group of groups) {
+    if (group.title === displayName) {
+      groupCache.set(cacheKey, group.id);
+      return group.id;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Group a single tab by its URL
+ * @param {object} tab - The tab to group
+ * @param {boolean} force - If true, ignore existing group membership
+ */
+async function groupTab(tab, force = false) {
+  if (!settings.enabled || !settings.autoGroup) return;
+  if (!tab.url || tab.pinned) return;
+
+  if (!force && tab.groupId !== browser.tabGroups.TAB_GROUP_ID_NONE) {
+    return;
+  }
+
+  const key = getGroupingKey(tab.url);
+  if (!key) return;
+
+  try {
+    let groupId = await findOrCreateGroup(key, tab.windowId);
+
+    if (groupId) {
+      await browser.tabs.group({ tabIds: tab.id, groupId });
+    } else {
+      groupId = await browser.tabs.group({ tabIds: tab.id });
+
+      const color = await getSmartColor(tab.windowId, tab.index);
+
+      await browser.tabGroups.update(groupId, {
+        title: getDisplayName(key),
+        color: color,
+        collapsed: settings.collapseGroups
+      });
+
+      const cacheKey = `${tab.windowId}-${key}`;
+      groupCache.set(cacheKey, groupId);
+    }
+  } catch (e) {
+    console.error('Error grouping tab:', e);
+  }
+}
+
+/**
+ * Group all tabs in a window
+ * @param {number} windowId - The window ID
+ * @param {boolean} force - If true, regroup all tabs ignoring existing groups
+ */
+async function groupAllTabsInWindow(windowId, force = false) {
+  if (!settings.enabled) return;
+
+  const tabs = await browser.tabs.query({ windowId });
+  const tabsByKey = new Map();
 
   for (const tab of tabs) {
-    if (tab.pinned) continue;
+    if (tab.pinned || !tab.url) continue;
+
+    if (!force && tab.groupId !== browser.tabGroups.TAB_GROUP_ID_NONE) {
+      continue;
+    }
 
     const key = getGroupingKey(tab.url);
     if (!key) continue;
 
-    if (!groups[key]) {
-      groups[key] = {
-        key,
-        name: getDisplayName(key),
-        tabs: [],
-        color: null // Will be assigned later
-      };
-      groupOrder.push(key);
+    if (!tabsByKey.has(key)) {
+      tabsByKey.set(key, []);
     }
-
-    groups[key].tabs.push({
-      id: tab.id,
-      title: tab.title,
-      url: tab.url,
-      favIconUrl: tab.favIconUrl,
-      active: tab.active
-    });
+    tabsByKey.get(key).push(tab);
   }
 
-  // Assign colors avoiding adjacent conflicts
-  let prevColor = null;
-  for (const key of groupOrder) {
-    const existingColors = prevColor ? [prevColor] : [];
-    groups[key].color = getGroupColor(key, existingColors);
-    prevColor = groups[key].color;
-  }
+  for (const [key, keyTabs] of tabsByKey) {
+    if (keyTabs.length === 0) continue;
 
-  // Sort groups if enabled
-  if (settings.sortByDomain) {
-    const sortedKeys = Object.keys(groups).sort((a, b) => {
-      return getDisplayName(a).localeCompare(getDisplayName(b));
-    });
-    const sortedGroups = {};
-    for (const key of sortedKeys) {
-      sortedGroups[key] = groups[key];
+    try {
+      const tabIds = keyTabs.map(t => t.id);
+      let groupId = await findOrCreateGroup(key, windowId);
+
+      if (groupId) {
+        await browser.tabs.group({ tabIds, groupId });
+      } else {
+        groupId = await browser.tabs.group({ tabIds });
+
+        const firstTabIndex = keyTabs[0].index;
+        const color = await getSmartColor(windowId, firstTabIndex);
+
+        await browser.tabGroups.update(groupId, {
+          title: getDisplayName(key),
+          color: color,
+          collapsed: settings.collapseGroups
+        });
+
+        const cacheKey = `${windowId}-${key}`;
+        groupCache.set(cacheKey, groupId);
+      }
+    } catch (e) {
+      console.error('Error grouping tabs for key:', key, e);
     }
-    return sortedGroups;
   }
-
-  return groups;
 }
 
 /**
- * Focus a specific tab
- * @param {number} tabId - Tab ID to focus
+ * Group all tabs in all windows
+ * @param {boolean} force - If true, regroup all tabs ignoring existing groups
  */
-async function focusTab(tabId) {
+async function groupAllTabs(force = false) {
+  const windows = await browser.windows.getAll({ windowTypes: ['normal'] });
+  for (const window of windows) {
+    await groupAllTabsInWindow(window.id, force);
+  }
+}
+
+/**
+ * Ungroup all tabs in all windows
+ */
+async function ungroupAllTabs() {
+  const tabs = await browser.tabs.query({});
+  const groupedTabs = tabs.filter(t => t.groupId !== browser.tabGroups.TAB_GROUP_ID_NONE);
+
+  if (groupedTabs.length > 0) {
+    await browser.tabs.ungroup(groupedTabs.map(t => t.id));
+  }
+
+  groupCache.clear();
+}
+
+/**
+ * Update color of a group if it conflicts with adjacent groups
+ * @param {number} groupId - The group ID to check
+ * @param {number} windowId - The window ID
+ */
+async function updateGroupColorIfNeeded(groupId, windowId) {
   try {
-    const tab = await browser.tabs.get(tabId);
-    await browser.tabs.update(tabId, { active: true });
-    await browser.windows.update(tab.windowId, { focused: true });
+    const groups = await browser.tabGroups.query({ windowId });
+    const tabs = await browser.tabs.query({ windowId });
+
+    const groupPositions = [];
+    for (const group of groups) {
+      const firstTab = tabs.find(t => t.groupId === group.id);
+      if (firstTab) {
+        groupPositions.push({ group, index: firstTab.index });
+      }
+    }
+    groupPositions.sort((a, b) => a.index - b.index);
+
+    const movedIndex = groupPositions.findIndex(gp => gp.group.id === groupId);
+    if (movedIndex === -1) return;
+
+    const movedGroup = groupPositions[movedIndex].group;
+    const prevGroup = movedIndex > 0 ? groupPositions[movedIndex - 1].group : null;
+    const nextGroup = movedIndex < groupPositions.length - 1 ? groupPositions[movedIndex + 1].group : null;
+
+    const hasConflict =
+      (prevGroup && prevGroup.color === movedGroup.color) ||
+      (nextGroup && nextGroup.color === movedGroup.color);
+
+    if (hasConflict) {
+      const usedColors = [prevGroup?.color, nextGroup?.color].filter(Boolean);
+      const availableColors = GROUP_COLORS.filter(c => !usedColors.includes(c));
+
+      if (availableColors.length > 0) {
+        const newColor = availableColors[Math.floor(Math.random() * availableColors.length)];
+        await browser.tabGroups.update(groupId, { color: newColor });
+      }
+    }
   } catch (e) {
-    console.error('Error focusing tab:', e);
+    console.error('Error updating group color:', e);
   }
 }
 
-/**
- * Close all tabs in a group except active
- * @param {string} groupKey - The group key
- */
-async function closeGroupTabs(groupKey) {
-  const groups = await getGroupedTabs();
-  const group = groups[groupKey];
-  if (!group) return;
+// Event Listeners
 
-  const tabIds = group.tabs
-    .filter(t => !t.active)
-    .map(t => t.id);
+// Tab created - always move to correct group based on URL
+browser.tabs.onCreated.addListener((tab) => {
+  setTimeout(() => {
+    browser.tabs.get(tab.id).then((t) => groupTab(t, true)).catch(() => {});
+  }, 100);
+});
 
-  if (tabIds.length > 0) {
-    await browser.tabs.remove(tabIds);
+// Tab updated (URL changed) - always move to correct group based on new URL
+browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.url) {
+    groupTab(tab, true);
   }
-}
+});
 
-/**
- * Close all tabs in a group
- * @param {string} groupKey - The group key
- */
-async function closeAllGroupTabs(groupKey) {
-  const groups = await getGroupedTabs();
-  const group = groups[groupKey];
-  if (!group) return;
+// Tab attached to window - always move to correct group
+browser.tabs.onAttached.addListener((tabId, attachInfo) => {
+  browser.tabs.get(tabId).then((t) => groupTab(t, true)).catch(() => {});
+});
 
-  const tabIds = group.tabs.map(t => t.id);
-  if (tabIds.length > 0) {
-    await browser.tabs.remove(tabIds);
+// Group removed - clean up cache
+browser.tabGroups.onRemoved.addListener((group) => {
+  for (const [key, id] of groupCache) {
+    if (id === group.id) {
+      groupCache.delete(key);
+      break;
+    }
   }
-}
+});
 
-/**
- * Move all tabs from a group together
- * @param {string} groupKey - The group key
- */
-async function consolidateGroup(groupKey) {
-  const groups = await getGroupedTabs();
-  const group = groups[groupKey];
-  if (!group || group.tabs.length < 2) return;
+// Debounce timer for group moves
+let groupMoveTimeout = null;
 
-  // Get the first tab's index as target
-  const firstTab = await browser.tabs.get(group.tabs[0].id);
-  let targetIndex = firstTab.index;
+// Tab moved - check if group colors need updating
+browser.tabs.onMoved.addListener((tabId, moveInfo) => {
+  clearTimeout(groupMoveTimeout);
+  groupMoveTimeout = setTimeout(async () => {
+    try {
+      const tab = await browser.tabs.get(tabId);
+      if (tab.groupId !== browser.tabGroups.TAB_GROUP_ID_NONE) {
+        await updateGroupColorIfNeeded(tab.groupId, tab.windowId);
+      }
+    } catch (e) {}
+  }, 300);
+});
 
-  // Move all other tabs next to the first one
-  for (let i = 1; i < group.tabs.length; i++) {
-    targetIndex++;
-    await browser.tabs.move(group.tabs[i].id, { index: targetIndex });
-  }
-}
+// Group updated - check colors when group properties change
+browser.tabGroups.onUpdated.addListener((group) => {
+  clearTimeout(groupMoveTimeout);
+  groupMoveTimeout = setTimeout(() => {
+    updateGroupColorIfNeeded(group.id, group.windowId);
+  }, 300);
+});
 
-// Message listener for sidebar and popup
+// Listen for messages from popup
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  switch (message.action) {
-    case 'getGroupedTabs':
-      getGroupedTabs().then(sendResponse);
-      return true;
-
-    case 'getSettings':
-      sendResponse(settings);
-      return false;
-
-    case 'saveSettings':
-      saveSettings(message.settings).then(() => sendResponse({ success: true }));
-      return true;
-
-    case 'focusTab':
-      focusTab(message.tabId).then(() => sendResponse({ success: true }));
-      return true;
-
-    case 'closeGroupTabs':
-      closeGroupTabs(message.groupKey).then(() => sendResponse({ success: true }));
-      return true;
-
-    case 'closeAllGroupTabs':
-      closeAllGroupTabs(message.groupKey).then(() => sendResponse({ success: true }));
-      return true;
-
-    case 'consolidateGroup':
-      consolidateGroup(message.groupKey).then(() => sendResponse({ success: true }));
-      return true;
-
-    case 'setGroupColor':
-      groupColors[message.groupKey] = message.color;
-      saveGroupColors().then(() => sendResponse({ success: true }));
-      return true;
+  if (message.action === 'getSettings') {
+    sendResponse(settings);
+  } else if (message.action === 'saveSettings') {
+    saveSettings(message.settings).then(() => sendResponse({ success: true }));
+    return true;
+  } else if (message.action === 'groupAllTabs') {
+    groupAllTabs(false).then(() => sendResponse({ success: true }));
+    return true;
+  } else if (message.action === 'forceGroupAllTabs') {
+    groupAllTabs(true).then(() => sendResponse({ success: true }));
+    return true;
+  } else if (message.action === 'ungroupAllTabs') {
+    ungroupAllTabs().then(() => sendResponse({ success: true }));
+    return true;
   }
 });
-
-// Notify sidebar when tabs change
-function notifyTabsChanged() {
-  browser.runtime.sendMessage({ action: 'tabsChanged' }).catch(() => {});
-}
-
-browser.tabs.onCreated.addListener(notifyTabsChanged);
-browser.tabs.onRemoved.addListener(notifyTabsChanged);
-browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.url || changeInfo.title) {
-    notifyTabsChanged();
-  }
-});
-browser.tabs.onMoved.addListener(notifyTabsChanged);
-browser.tabs.onActivated.addListener(notifyTabsChanged);
 
 // Initialize
 loadSettings().then(() => {
   console.log('Tab Grouper by Subdomain (Firefox) initialized');
+  if (settings.autoGroup) {
+    groupAllTabs();
+  }
 });
