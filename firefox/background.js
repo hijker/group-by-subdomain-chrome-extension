@@ -395,6 +395,43 @@ async function ungroupAllTabs() {
 }
 
 /**
+ * Refresh all existing group titles based on current settings
+ * Used when capitalize setting changes
+ */
+async function refreshGroupNames() {
+  const windows = await browser.windows.getAll({ windowTypes: ['normal'] });
+  suppressRenameDetection = true;
+  try {
+    for (const win of windows) {
+      const groups = await browser.tabGroups.query({ windowId: win.id });
+      const tabs = await browser.tabs.query({ windowId: win.id });
+
+      for (const group of groups) {
+        // Try in-memory map first, otherwise derive key from tabs in the group
+        let key = groupIdToKey.get(group.id);
+        if (!key) {
+          const groupTab = tabs.find(t => t.groupId === group.id && t.url);
+          if (groupTab) {
+            key = getGroupingKey(groupTab.url);
+            if (key) {
+              groupIdToKey.set(group.id, key);
+            }
+          }
+        }
+        if (key) {
+          const newTitle = getDisplayName(key);
+          if (group.title !== newTitle) {
+            await browser.tabGroups.update(group.id, { title: newTitle });
+          }
+        }
+      }
+    }
+  } finally {
+    suppressRenameDetection = false;
+  }
+}
+
+/**
  * Update color of a group if it conflicts with adjacent groups
  * @param {number} groupId - The group ID to check
  * @param {number} windowId - The window ID
@@ -542,6 +579,9 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse(customNames);
   } else if (message.action === 'resetCustomNames') {
     resetCustomNames().then(() => sendResponse({ success: true }));
+    return true;
+  } else if (message.action === 'refreshGroupNames') {
+    refreshGroupNames().then(() => sendResponse({ success: true }));
     return true;
   }
 });

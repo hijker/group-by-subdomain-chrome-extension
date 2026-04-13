@@ -453,6 +453,43 @@ async function ungroupAllTabs() {
   groupIdToKey.clear();
 }
 
+/**
+ * Refresh all existing group titles based on current settings
+ * Used when capitalize setting changes
+ */
+async function refreshGroupNames() {
+  const windows = await chrome.windows.getAll({ windowTypes: ['normal'] });
+  suppressRenameDetection = true;
+  try {
+    for (const win of windows) {
+      const groups = await chrome.tabGroups.query({ windowId: win.id });
+      const tabs = await chrome.tabs.query({ windowId: win.id });
+
+      for (const group of groups) {
+        // Try in-memory map first, otherwise derive key from tabs in the group
+        let key = groupIdToKey.get(group.id);
+        if (!key) {
+          const groupTab = tabs.find(t => t.groupId === group.id && t.url);
+          if (groupTab) {
+            key = getGroupingKey(groupTab.url);
+            if (key) {
+              groupIdToKey.set(group.id, key);
+            }
+          }
+        }
+        if (key) {
+          const newTitle = getDisplayName(key);
+          if (group.title !== newTitle) {
+            await chrome.tabGroups.update(group.id, { title: newTitle });
+          }
+        }
+      }
+    }
+  } finally {
+    suppressRenameDetection = false;
+  }
+}
+
 // Event Listeners
 
 // Tab created - always move to correct group based on URL
@@ -610,6 +647,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse(customNames);
   } else if (message.action === 'resetCustomNames') {
     resetCustomNames().then(() => sendResponse({ success: true }));
+    return true;
+  } else if (message.action === 'refreshGroupNames') {
+    refreshGroupNames().then(() => sendResponse({ success: true }));
     return true;
   }
 });

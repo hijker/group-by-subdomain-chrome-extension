@@ -105,7 +105,10 @@ enabledToggle.addEventListener('change', saveSettings);
 autoGroupToggle.addEventListener('change', saveSettings);
 collapseGroupsToggle.addEventListener('change', saveSettings);
 ignoreWwwToggle.addEventListener('change', saveSettings);
-capitalizeNamesToggle.addEventListener('change', saveSettings);
+capitalizeNamesToggle.addEventListener('change', async () => {
+  await saveSettings();
+  await chrome.runtime.sendMessage({ action: 'refreshGroupNames' });
+});
 
 // Group new tabs button (respects existing groups)
 groupAllBtn.addEventListener('click', async () => {
