@@ -13,6 +13,7 @@ const forceGroupBtn = document.getElementById('forceGroup');
 const ungroupAllBtn = document.getElementById('ungroupAll');
 const resetNamesBtn = document.getElementById('resetNames');
 const customNamesCountEl = document.getElementById('customNamesCount');
+const customNamesListEl = document.getElementById('customNamesList');
 const statusEl = document.getElementById('status');
 
 /**
@@ -46,13 +47,39 @@ async function loadSettings() {
 }
 
 /**
- * Load and display the count of custom names
+ * Load and display custom names list
  */
 async function loadCustomNamesCount() {
   const customNames = await browser.runtime.sendMessage({ action: 'getCustomNames' });
-  const count = Object.keys(customNames || {}).length;
+  const entries = Object.entries(customNames || {});
+  const count = entries.length;
   customNamesCountEl.textContent = count;
   resetNamesBtn.disabled = count === 0;
+
+  // Render the list
+  customNamesListEl.innerHTML = '';
+  for (const [key, name] of entries) {
+    const row = document.createElement('div');
+    row.className = 'custom-name-row';
+
+    const keySpan = document.createElement('span');
+    keySpan.className = 'custom-name-key';
+    keySpan.textContent = key;
+    keySpan.title = key;
+
+    const arrow = document.createElement('span');
+    arrow.className = 'custom-name-arrow';
+    arrow.textContent = '→';
+
+    const valueSpan = document.createElement('span');
+    valueSpan.className = 'custom-name-value';
+    valueSpan.textContent = name;
+
+    row.appendChild(keySpan);
+    row.appendChild(arrow);
+    row.appendChild(valueSpan);
+    customNamesListEl.appendChild(row);
+  }
 }
 
 /**
@@ -136,6 +163,7 @@ resetNamesBtn.addEventListener('click', async () => {
   try {
     await browser.runtime.sendMessage({ action: 'resetCustomNames' });
     customNamesCountEl.textContent = '0';
+    customNamesListEl.innerHTML = '';
     showStatus('Custom names cleared!', 'success');
   } catch (e) {
     showStatus('Error resetting names', 'info');
