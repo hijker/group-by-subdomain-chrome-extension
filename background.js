@@ -332,7 +332,7 @@ async function groupTab(tab, force = false) {
           await chrome.tabGroups.update(groupId, {
             title: getDisplayName(key),
             color: color,
-            collapsed: settings.collapseGroups
+            collapsed: false
           });
           suppressRenameDetection = false;
 
