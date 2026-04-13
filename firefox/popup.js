@@ -7,6 +7,7 @@ const enabledToggle = document.getElementById('enabled');
 const autoGroupToggle = document.getElementById('autoGroup');
 const collapseGroupsToggle = document.getElementById('collapseGroups');
 const ignoreWwwToggle = document.getElementById('ignoreWww');
+const capitalizeNamesToggle = document.getElementById('capitalizeNames');
 const groupAllBtn = document.getElementById('groupAll');
 const forceGroupBtn = document.getElementById('forceGroup');
 const ungroupAllBtn = document.getElementById('ungroupAll');
@@ -38,6 +39,7 @@ async function loadSettings() {
   autoGroupToggle.checked = settings.autoGroup;
   collapseGroupsToggle.checked = settings.collapseGroups;
   ignoreWwwToggle.checked = settings.ignoreWww;
+  capitalizeNamesToggle.checked = settings.capitalizeNames || false;
 
   // Load custom names count
   await loadCustomNamesCount();
@@ -61,7 +63,8 @@ async function saveSettings() {
     enabled: enabledToggle.checked,
     autoGroup: autoGroupToggle.checked,
     collapseGroups: collapseGroupsToggle.checked,
-    ignoreWww: ignoreWwwToggle.checked
+    ignoreWww: ignoreWwwToggle.checked,
+    capitalizeNames: capitalizeNamesToggle.checked
   };
 
   await browser.runtime.sendMessage({ action: 'saveSettings', settings });
@@ -75,6 +78,7 @@ enabledToggle.addEventListener('change', saveSettings);
 autoGroupToggle.addEventListener('change', saveSettings);
 collapseGroupsToggle.addEventListener('change', saveSettings);
 ignoreWwwToggle.addEventListener('change', saveSettings);
+capitalizeNamesToggle.addEventListener('change', saveSettings);
 
 // Group new tabs button (respects existing groups)
 groupAllBtn.addEventListener('click', async () => {

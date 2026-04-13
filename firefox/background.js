@@ -24,7 +24,8 @@ let settings = {
   enabled: true,
   autoGroup: true,
   collapseGroups: false,
-  ignoreWww: true
+  ignoreWww: true,
+  capitalizeNames: false
 };
 
 // Load settings and custom names from storage
@@ -116,7 +117,8 @@ function getDisplayName(key) {
     return key;
   }
   const parts = key.split('.');
-  return parts[0];
+  const name = parts[0];
+  return settings.capitalizeNames ? name.charAt(0).toUpperCase() + name.slice(1) : name;
 }
 
 /**
@@ -129,7 +131,8 @@ function getDefaultDisplayName(key) {
     return key;
   }
   const parts = key.split('.');
-  return parts[0];
+  const name = parts[0];
+  return settings.capitalizeNames ? name.charAt(0).toUpperCase() + name.slice(1) : name;
 }
 
 /**

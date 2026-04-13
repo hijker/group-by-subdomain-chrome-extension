@@ -177,6 +177,52 @@
       color: #333;
     }
 
+    .custom-names-list {
+      max-height: 140px;
+      overflow-y: auto;
+      margin-bottom: 8px;
+      border: 1px solid #e0e0e0;
+      border-radius: 6px;
+    }
+
+    .custom-names-list:empty {
+      display: none;
+    }
+
+    .custom-name-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 10px;
+      font-size: 12px;
+      border-bottom: 1px solid #f1f3f4;
+    }
+
+    .custom-name-row:last-child {
+      border-bottom: none;
+    }
+
+    .custom-name-key {
+      color: #888;
+      flex-shrink: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .custom-name-arrow {
+      color: #bbb;
+      margin: 0 6px;
+      flex-shrink: 0;
+    }
+
+    .custom-name-value {
+      color: #1a73e8;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+
     .status {
       margin-top: 12px;
       padding: 8px;
@@ -263,6 +309,17 @@
         <span class="slider"></span>
       </label>
     </div>
+
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">Capitalize Group Names</div>
+        <div class="toggle-description">e.g. "github" → "Github"</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="capitalizeNames">
+        <span class="slider"></span>
+      </label>
+    </div>
   </div>
 
   <div class="section">
@@ -279,6 +336,7 @@
     <div class="custom-names-info">
       Renamed groups: <span class="custom-names-count" id="customNamesCount">0</span>
     </div>
+    <div class="custom-names-list" id="customNamesList"></div>
     <button class="btn btn-danger" id="resetNames" style="width: 100%;" title="Clear all remembered custom group names">Reset Custom Names</button>
   </div>
 
