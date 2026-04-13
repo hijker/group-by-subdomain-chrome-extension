@@ -10,6 +10,8 @@ const ignoreWwwToggle = document.getElementById('ignoreWww');
 const groupAllBtn = document.getElementById('groupAll');
 const forceGroupBtn = document.getElementById('forceGroup');
 const ungroupAllBtn = document.getElementById('ungroupAll');
+const resetNamesBtn = document.getElementById('resetNames');
+const customNamesCountEl = document.getElementById('customNamesCount');
 const statusEl = document.getElementById('status');
 
 /**
@@ -36,6 +38,19 @@ async function loadSettings() {
   autoGroupToggle.checked = settings.autoGroup;
   collapseGroupsToggle.checked = settings.collapseGroups;
   ignoreWwwToggle.checked = settings.ignoreWww;
+
+  // Load custom names count
+  await loadCustomNamesCount();
+}
+
+/**
+ * Load and display the count of custom names
+ */
+async function loadCustomNamesCount() {
+  const customNames = await chrome.runtime.sendMessage({ action: 'getCustomNames' });
+  const count = Object.keys(customNames || {}).length;
+  customNamesCountEl.textContent = count;
+  resetNamesBtn.disabled = count === 0;
 }
 
 /**
@@ -107,6 +122,23 @@ ungroupAllBtn.addEventListener('click', async () => {
 
   ungroupAllBtn.disabled = false;
   ungroupAllBtn.textContent = 'Ungroup';
+});
+
+// Reset custom names button
+resetNamesBtn.addEventListener('click', async () => {
+  resetNamesBtn.disabled = true;
+  resetNamesBtn.textContent = 'Resetting...';
+
+  try {
+    await chrome.runtime.sendMessage({ action: 'resetCustomNames' });
+    customNamesCountEl.textContent = '0';
+    showStatus('Custom names cleared!', 'success');
+  } catch (e) {
+    showStatus('Error resetting names', 'info');
+  }
+
+  resetNamesBtn.disabled = false;
+  resetNamesBtn.textContent = 'Reset Custom Names';
 });
 
 // Initialize

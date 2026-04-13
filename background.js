@@ -6,12 +6,18 @@
 // Store for group IDs mapped to subdomain keys
 const groupCache = new Map();
 
+// Reverse lookup: groupId -> grouping key (to detect renames)
+const groupIdToKey = new Map();
+
 // Lock mechanism to prevent race conditions when creating groups
 const pendingGroups = new Map(); // key -> Promise
 
 // Color palette for tab groups
 const GROUP_COLORS = ['blue', 'red', 'yellow', 'green', 'pink', 'purple', 'cyan', 'orange', 'grey'];
 let colorIndex = 0;
+
+// Custom names: grouping key -> user-defined name
+let customNames = {};
 
 // Settings with defaults
 let settings = {
@@ -21,11 +27,14 @@ let settings = {
   ignoreWww: true
 };
 
-// Load settings from storage
+// Load settings and custom names from storage
 async function loadSettings() {
-  const stored = await chrome.storage.sync.get('settings');
+  const stored = await chrome.storage.sync.get(['settings', 'customNames']);
   if (stored.settings) {
     settings = { ...settings, ...stored.settings };
+  }
+  if (stored.customNames) {
+    customNames = stored.customNames;
   }
 }
 
@@ -33,6 +42,17 @@ async function loadSettings() {
 async function saveSettings(newSettings) {
   settings = { ...settings, ...newSettings };
   await chrome.storage.sync.set({ settings });
+}
+
+// Save custom names to storage
+async function saveCustomNames() {
+  await chrome.storage.sync.set({ customNames });
+}
+
+// Reset all custom names
+async function resetCustomNames() {
+  customNames = {};
+  await chrome.storage.sync.remove('customNames');
 }
 
 /**
@@ -75,17 +95,35 @@ function getGroupingKey(url) {
 
 /**
  * Get display name for a group (clean format)
- * Returns the first word of the hostname (subdomain or domain name)
+ * Checks custom names first, then falls back to first word of hostname
  * @param {string} key - The grouping key (e.g., "grafana.mms.company.com" or "google.com")
  * @returns {string} - Display name for the group (e.g., "grafana" or "google")
  */
 function getDisplayName(key) {
+  // Check if user has set a custom name for this key
+  if (customNames[key]) {
+    return customNames[key];
+  }
+
   // Handle IP addresses and localhost - return as-is
   if (/^\d+\.\d+\.\d+\.\d+$/.test(key) || key === 'localhost') {
     return key;
   }
 
   // Return the first part (leftmost subdomain or domain name)
+  const parts = key.split('.');
+  return parts[0];
+}
+
+/**
+ * Get the default (auto-generated) display name for a key, ignoring custom names
+ * @param {string} key - The grouping key
+ * @returns {string} - Default display name
+ */
+function getDefaultDisplayName(key) {
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(key) || key === 'localhost') {
+    return key;
+  }
   const parts = key.split('.');
   return parts[0];
 }
@@ -169,20 +207,24 @@ async function findOrCreateGroup(key, windowId) {
     try {
       // Verify group still exists
       await chrome.tabGroups.get(groupId);
+      groupIdToKey.set(groupId, key);
       return groupId;
     } catch (e) {
       // Group no longer exists, remove from cache
       groupCache.delete(cacheKey);
+      groupIdToKey.delete(groupId);
     }
   }
 
-  // Look for existing group with matching title
+  // Look for existing group with matching title (check both custom and default names)
   const groups = await chrome.tabGroups.query({ windowId });
   const displayName = getDisplayName(key);
+  const defaultName = getDefaultDisplayName(key);
 
   for (const group of groups) {
-    if (group.title === displayName) {
+    if (group.title === displayName || group.title === defaultName) {
       groupCache.set(cacheKey, group.id);
+      groupIdToKey.set(group.id, key);
       return group.id;
     }
   }
@@ -285,15 +327,18 @@ async function groupTab(tab, force = false) {
           // Get a color that doesn't conflict with adjacent groups
           const color = await getSmartColor(tab.windowId, tab.index);
 
-          // Update group properties
+          // Update group properties (suppress rename detection for programmatic title set)
+          suppressRenameDetection = true;
           await chrome.tabGroups.update(groupId, {
             title: getDisplayName(key),
             color: color,
             collapsed: settings.collapseGroups
           });
+          suppressRenameDetection = false;
 
           // Cache the new group
           groupCache.set(lockKey, groupId);
+          groupIdToKey.set(groupId, key);
         }
       } finally {
         resolvePromise();
@@ -360,14 +405,18 @@ async function groupAllTabsInWindow(windowId, force = false) {
         const firstTabIndex = keyTabs[0].index;
         const color = await getSmartColor(windowId, firstTabIndex);
 
+        // Suppress rename detection for programmatic title set
+        suppressRenameDetection = true;
         await chrome.tabGroups.update(groupId, {
           title: getDisplayName(key),
           color: color,
           collapsed: settings.collapseGroups
         });
+        suppressRenameDetection = false;
 
         const cacheKey = `${windowId}-${key}`;
         groupCache.set(cacheKey, groupId);
+        groupIdToKey.set(groupId, key);
       }
     } catch (e) {
       console.error('Error grouping tabs for key:', key, e);
@@ -398,6 +447,7 @@ async function ungroupAllTabs() {
   }
 
   groupCache.clear();
+  groupIdToKey.clear();
 }
 
 // Event Listeners
@@ -431,6 +481,7 @@ chrome.tabGroups.onRemoved.addListener((group) => {
       break;
     }
   }
+  groupIdToKey.delete(group.id);
 });
 
 /**
@@ -498,9 +549,36 @@ chrome.tabs.onMoved.addListener((tabId, moveInfo) => {
   }, 300);
 });
 
-// Group updated - check colors when group properties change
+// Flag to suppress rename detection when we're setting the title programmatically
+let suppressRenameDetection = false;
+
+// Group updated - detect user renames and check colors
 chrome.tabGroups.onUpdated.addListener((group) => {
-  // Debounce to avoid rapid updates
+  // Detect user rename: if we know the key for this group, and the title
+  // is different from both the custom name and the default name, it's a rename
+  if (!suppressRenameDetection && group.title !== undefined) {
+    const key = groupIdToKey.get(group.id);
+    if (key) {
+      const defaultName = getDefaultDisplayName(key);
+      const currentCustom = customNames[key];
+      const expectedName = currentCustom || defaultName;
+
+      // If the title changed to something different, the user renamed it
+      if (group.title !== expectedName && group.title !== defaultName) {
+        customNames[key] = group.title;
+        saveCustomNames();
+        console.log(`Custom name saved: "${key}" → "${group.title}"`);
+      }
+      // If the user renamed it back to the default name, remove the custom name
+      else if (group.title === defaultName && currentCustom) {
+        delete customNames[key];
+        saveCustomNames();
+        console.log(`Custom name cleared for "${key}" (reverted to default)`);
+      }
+    }
+  }
+
+  // Debounce color check to avoid rapid updates
   clearTimeout(groupMoveTimeout);
   groupMoveTimeout = setTimeout(() => {
     updateGroupColorIfNeeded(group.id, group.windowId);
@@ -524,6 +602,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   } else if (message.action === 'ungroupAllTabs') {
     ungroupAllTabs().then(() => sendResponse({ success: true }));
+    return true;
+  } else if (message.action === 'getCustomNames') {
+    sendResponse(customNames);
+  } else if (message.action === 'resetCustomNames') {
+    resetCustomNames().then(() => sendResponse({ success: true }));
     return true;
   }
 });
