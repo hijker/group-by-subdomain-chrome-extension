@@ -1,5 +1,8 @@
 # Tab Grouper by Subdomain
 
+Published on mozilla : 
+https://addons.mozilla.org/en-US/firefox/addon/tab-grouper-by-subdomain/
+
 A Chrome extension that automatically groups tabs by domain and subdomain (up to 1 level) into Chrome's native tab groups.
 
 ![Tab Grouper Icon](icons/icon128.png)
