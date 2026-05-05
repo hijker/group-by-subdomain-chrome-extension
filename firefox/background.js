@@ -111,34 +111,85 @@ function getGroupingKey(url) {
 }
 
 /**
- * Get display name for a group
+ * Get max name length based on number of groups in window
+ * @param {number} groupCount - Number of groups
+ * @returns {number|null} - Max characters, or null for no limit
+ */
+function getMaxNameLength(groupCount) {
+  if (groupCount > 15) return 1;
+  if (groupCount > 10) return 3;
+  return null; // No limit
+}
+
+/**
+ * Apply truncation to a name based on max length
+ * @param {string} name - The full name
+ * @param {number|null} maxLen - Max characters, or null for no limit
+ * @returns {string} - Truncated name
+ */
+function truncateName(name, maxLen) {
+  if (maxLen === null || name.length <= maxLen) return name;
+  return name.substring(0, maxLen);
+}
+
+/**
+ * Get display name for a group (clean format)
  * Checks custom names first, then falls back to first word of hostname
  * @param {string} key - The grouping key
+ * @param {number|null} maxLen - Optional max length for truncation
  * @returns {string} - Display name for the group
  */
-function getDisplayName(key) {
+function getDisplayName(key, maxLen = null) {
   // Check if user has set a custom name for this key
   if (customNames[key]) {
-    return customNames[key];
+    return truncateName(customNames[key], maxLen);
   }
 
   if (/^\d+\.\d+\.\d+\.\d+$/.test(key) || key === 'localhost') {
-    return key;
+    return truncateName(key, maxLen);
   }
+  const parts = key.split('.');
+  const name = parts[0];
+  const formatted = settings.capitalizeNames ? name.charAt(0).toUpperCase() + name.slice(1) : name;
+  return truncateName(formatted, maxLen);
+}
+
+/**
+ * Get the default (auto-generated) display name for a key, ignoring custom names
+ * @param {string} key - The grouping key
+ * @param {number|null} maxLen - Optional max length for truncation
+ * @returns {string} - Default display name
+ */
+function getDefaultDisplayName(key, maxLen = null) {
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(key) || key === 'localhost') {
+    return truncateName(key, maxLen);
+  }
+  const parts = key.split('.');
+  const name = parts[0];
+  const formatted = settings.capitalizeNames ? name.charAt(0).toUpperCase() + name.slice(1) : name;
+  return truncateName(formatted, maxLen);
+}
+
+/**
+ * Get the full (untruncated) display name for matching purposes
+ * @param {string} key - The grouping key
+ * @returns {string} - Full display name
+ */
+function getFullDisplayName(key) {
+  if (customNames[key]) return customNames[key];
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(key) || key === 'localhost') return key;
   const parts = key.split('.');
   const name = parts[0];
   return settings.capitalizeNames ? name.charAt(0).toUpperCase() + name.slice(1) : name;
 }
 
 /**
- * Get the default (auto-generated) display name for a key, ignoring custom names
+ * Get the full (untruncated) default display name for matching purposes
  * @param {string} key - The grouping key
- * @returns {string} - Default display name
+ * @returns {string} - Full default display name
  */
-function getDefaultDisplayName(key) {
-  if (/^\d+\.\d+\.\d+\.\d+$/.test(key) || key === 'localhost') {
-    return key;
-  }
+function getFullDefaultDisplayName(key) {
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(key) || key === 'localhost') return key;
   const parts = key.split('.');
   const name = parts[0];
   return settings.capitalizeNames ? name.charAt(0).toUpperCase() + name.slice(1) : name;
@@ -223,13 +274,19 @@ async function findOrCreateGroup(key, windowId) {
     }
   }
 
-  // Look for existing group with matching title (check both custom and default names)
+  // Look for existing group with matching title
+  // Check all possible truncation levels (full, 3-char, 1-char) and both custom and default names
   const groups = await browser.tabGroups.query({ windowId });
-  const displayName = getDisplayName(key);
-  const defaultName = getDefaultDisplayName(key);
+  const fullDisplay = getFullDisplayName(key);
+  const fullDefault = getFullDefaultDisplayName(key);
+  const possibleTitles = new Set([
+    fullDisplay, fullDefault,
+    truncateName(fullDisplay, 3), truncateName(fullDefault, 3),
+    truncateName(fullDisplay, 1), truncateName(fullDefault, 1)
+  ]);
 
   for (const group of groups) {
-    if (group.title === displayName || group.title === defaultName) {
+    if (possibleTitles.has(group.title)) {
       groupCache.set(cacheKey, group.id);
       groupIdToKey.set(group.id, key);
       return group.id;
@@ -288,8 +345,12 @@ async function groupTab(tab, force = false) {
 
           const color = await getSmartColor(tab.windowId, tab.index);
 
+          // Determine truncation based on group count (including this new one)
+          const allGroups = await browser.tabGroups.query({ windowId: tab.windowId });
+          const maxLen = getMaxNameLength(allGroups.length);
+
           // Track title to avoid false rename detection
-          const title = getDisplayName(key);
+          const title = getDisplayName(key, maxLen);
           programmaticTitles.set(groupId, title);
           await browser.tabGroups.update(groupId, {
             title: title,
@@ -300,6 +361,9 @@ async function groupTab(tab, force = false) {
           // Cache the new group
           groupCache.set(lockKey, groupId);
           groupIdToKey.set(groupId, key);
+
+          // Check if we crossed a threshold — update all group names
+          await updateGroupNamesForWindow(tab.windowId);
         }
       } finally {
         resolvePromise();
@@ -377,6 +441,9 @@ async function groupAllTabsInWindow(windowId, force = false) {
       console.error('Error grouping tabs for key:', key, e);
     }
   }
+
+  // After all groups created, update names based on final group count
+  await updateGroupNamesForWindow(windowId);
 }
 
 /**
@@ -406,35 +473,42 @@ async function ungroupAllTabs() {
 }
 
 /**
+ * Update all group names in a window based on current group count (for truncation)
+ * Called when groups are added/removed to handle threshold crossings
+ * @param {number} windowId - The window ID
+ */
+async function updateGroupNamesForWindow(windowId) {
+  const groups = await browser.tabGroups.query({ windowId });
+  const tabs = await browser.tabs.query({ windowId });
+  const maxLen = getMaxNameLength(groups.length);
+
+  for (const group of groups) {
+    let key = groupIdToKey.get(group.id);
+    if (!key) {
+      const groupTab = tabs.find(t => t.groupId === group.id && t.url);
+      if (groupTab) {
+        key = getGroupingKey(groupTab.url);
+        if (key) groupIdToKey.set(group.id, key);
+      }
+    }
+    if (key) {
+      const newTitle = getDisplayName(key, maxLen);
+      if (group.title !== newTitle) {
+        programmaticTitles.set(group.id, newTitle);
+        await browser.tabGroups.update(group.id, { title: newTitle });
+      }
+    }
+  }
+}
+
+/**
  * Refresh all existing group titles based on current settings
  * Used when capitalize setting changes
  */
 async function refreshGroupNames() {
   const windows = await browser.windows.getAll({ windowTypes: ['normal'] });
   for (const win of windows) {
-    const groups = await browser.tabGroups.query({ windowId: win.id });
-    const tabs = await browser.tabs.query({ windowId: win.id });
-
-    for (const group of groups) {
-      // Try in-memory map first, otherwise derive key from tabs in the group
-      let key = groupIdToKey.get(group.id);
-      if (!key) {
-        const groupTab = tabs.find(t => t.groupId === group.id && t.url);
-        if (groupTab) {
-          key = getGroupingKey(groupTab.url);
-          if (key) {
-            groupIdToKey.set(group.id, key);
-          }
-        }
-      }
-      if (key) {
-        const newTitle = getDisplayName(key);
-        if (group.title !== newTitle) {
-          programmaticTitles.set(group.id, newTitle);
-          await browser.tabGroups.update(group.id, { title: newTitle });
-        }
-      }
-    }
+    await updateGroupNamesForWindow(win.id);
   }
 }
 
@@ -503,8 +577,9 @@ browser.tabs.onAttached.addListener((tabId, attachInfo) => {
   browser.tabs.get(tabId).then((t) => groupTab(t, true)).catch(() => {});
 });
 
-// Group removed - clean up cache
+// Group removed - clean up cache and update remaining group names (may expand)
 browser.tabGroups.onRemoved.addListener((group) => {
+  // Remove from cache
   for (const [key, id] of groupCache) {
     if (id === group.id) {
       groupCache.delete(key);
@@ -512,6 +587,12 @@ browser.tabGroups.onRemoved.addListener((group) => {
     }
   }
   groupIdToKey.delete(group.id);
+  programmaticTitles.delete(group.id);
+
+  // Update remaining group names — count dropped, names might expand
+  if (group.windowId) {
+    setTimeout(() => updateGroupNamesForWindow(group.windowId), 200);
+  }
 });
 
 // Debounce timer for group moves
@@ -544,18 +625,26 @@ browser.tabGroups.onUpdated.addListener((group) => {
       programmaticTitles.delete(group.id); // Clean up stale entry if any
       const key = groupIdToKey.get(group.id);
       if (key) {
-        const defaultName = getDefaultDisplayName(key);
+        // Use full names for comparison — truncated versions are our own
+        const fullDefault = getFullDefaultDisplayName(key);
+        const fullDisplay = getFullDisplayName(key);
         const currentCustom = customNames[key];
-        const expectedName = currentCustom || defaultName;
 
-        // If the title changed to something different, the user renamed it
-        if (group.title !== expectedName && group.title !== defaultName) {
+        // Build set of all names we might have set (full + all truncations)
+        const ourNames = new Set([
+          fullDisplay, fullDefault,
+          truncateName(fullDisplay, 3), truncateName(fullDefault, 3),
+          truncateName(fullDisplay, 1), truncateName(fullDefault, 1)
+        ]);
+
+        // If the title is NOT one of ours, the user renamed it
+        if (!ourNames.has(group.title)) {
           customNames[key] = group.title;
           saveCustomNames();
           console.log(`Custom name saved: "${key}" → "${group.title}"`);
         }
         // If the user renamed it back to the default name, remove the custom name
-        else if (group.title === defaultName && currentCustom) {
+        else if (group.title === fullDefault && currentCustom) {
           delete customNames[key];
           saveCustomNames();
           console.log(`Custom name cleared for "${key}" (reverted to default)`);
