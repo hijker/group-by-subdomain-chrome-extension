@@ -677,52 +677,67 @@ chrome.tabs.onMoved.addListener((tabId, moveInfo) => {
 });
 
 // Group updated - detect user renames and check colors
-chrome.tabGroups.onUpdated.addListener((group) => {
-  // Detect user rename — but skip if we set this title ourselves
-  if (group.title !== undefined) {
-    // Check if this was a programmatic title change we made
-    const programmaticTitle = programmaticTitles.get(group.id);
-    if (programmaticTitle !== undefined && group.title === programmaticTitle) {
-      // This is our own update, ignore it and clean up
-      programmaticTitles.delete(group.id);
-    } else {
-      // Not our update — could be a user rename
-      programmaticTitles.delete(group.id); // Clean up stale entry if any
-      const key = groupIdToKey.get(group.id);
-      if (key) {
-        // Use full names for comparison — truncated versions are our own
-        const fullDefault = getFullDefaultDisplayName(key);
-        const fullDisplay = getFullDisplayName(key);
-        const currentCustom = customNames[key];
-
-        // Build set of all names we might have set (full + all truncations)
-        const ourNames = new Set([
-          fullDisplay, fullDefault,
-          truncateName(fullDisplay, 3), truncateName(fullDefault, 3),
-          truncateName(fullDisplay, 1), truncateName(fullDefault, 1)
-        ]);
-
-        // If the title is NOT one of ours, the user renamed it
-        if (!ourNames.has(group.title)) {
-          customNames[key] = group.title;
-          saveCustomNames();
-          console.log(`Custom name saved: "${key}" → "${group.title}"`);
-        }
-        // If the user renamed it back to the default name, remove the custom name
-        else if (group.title === fullDefault && currentCustom) {
-          delete customNames[key];
-          saveCustomNames();
-          console.log(`Custom name cleared for "${key}" (reverted to default)`);
-        }
-      }
-    }
-  }
-
-  // Debounce color check to avoid rapid updates
+chrome.tabGroups.onUpdated.addListener(async (group) => {
+  // Color conflict check runs immediately (doesn't need settings)
   clearTimeout(groupMoveTimeout);
   groupMoveTimeout = setTimeout(() => {
     updateGroupColorIfNeeded(group.id, group.windowId);
   }, 300);
+
+  // Rename detection requires customNames to be loaded first
+  await settingsReadyPromise;
+
+  if (group.title !== undefined) {
+    // Check if this title matches what we last set programmatically
+    const programmaticTitle = programmaticTitles.get(group.id);
+    if (programmaticTitle !== undefined && group.title === programmaticTitle) {
+      // This is our own update — keep the entry for future event protection
+      return;
+    }
+
+    // Look up the grouping key — try in-memory map first, then derive from tabs
+    let key = groupIdToKey.get(group.id);
+    if (!key) {
+      try {
+        const tabs = await chrome.tabs.query({ windowId: group.windowId });
+        const matchingTab = tabs.find(t => t.groupId === group.id && t.url);
+        if (matchingTab) {
+          key = getGroupingKey(matchingTab.url);
+          if (key) groupIdToKey.set(group.id, key);
+        }
+      } catch (e) {
+        console.error('Error deriving key from tabs:', e);
+      }
+    }
+    if (!key) return;
+
+    // Use full names for comparison — truncated versions are our own
+    const fullDefault = getFullDefaultDisplayName(key);
+    const fullDisplay = getFullDisplayName(key);
+    const currentCustom = customNames[key];
+
+    // Build set of all names we might have set (full + all truncations)
+    const ourNames = new Set([
+      fullDisplay, fullDefault,
+      truncateName(fullDisplay, 3), truncateName(fullDefault, 3),
+      truncateName(fullDisplay, 1), truncateName(fullDefault, 1)
+    ]);
+
+    // If the title is NOT one of ours, the user renamed it
+    if (!ourNames.has(group.title)) {
+      if (customNames[key] !== group.title) { // Avoid redundant saves
+        customNames[key] = group.title;
+        saveCustomNames();
+        console.log(`Custom name saved: "${key}" → "${group.title}"`);
+      }
+    }
+    // If the user renamed it back to the default name, remove the custom name
+    else if (group.title === fullDefault && currentCustom) {
+      delete customNames[key];
+      saveCustomNames();
+      console.log(`Custom name cleared for "${key}" (reverted to default)`);
+    }
+  }
 });
 
 // Listen for messages from popup
