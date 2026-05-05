@@ -19,6 +19,10 @@ let colorIndex = 0;
 // Custom names: grouping key -> user-defined name
 let customNames = {};
 
+// Track titles we set programmatically: groupId -> title
+// Used to distinguish user renames from our own title updates
+const programmaticTitles = new Map();
+
 // Settings with defaults
 let settings = {
   enabled: true,
@@ -27,6 +31,10 @@ let settings = {
   ignoreWww: true,
   capitalizeNames: false
 };
+
+// Promise that resolves when settings are loaded - prevents race conditions on startup
+let settingsReady;
+const settingsReadyPromise = new Promise(resolve => { settingsReady = resolve; });
 
 // Load settings and custom names from storage
 async function loadSettings() {
@@ -41,6 +49,7 @@ async function loadSettings() {
   } catch (e) {
     console.error('Error loading settings:', e);
   }
+  settingsReady();
 }
 
 // Save settings to storage
@@ -236,6 +245,7 @@ async function findOrCreateGroup(key, windowId) {
  * @param {boolean} force - If true, ignore existing group membership
  */
 async function groupTab(tab, force = false) {
+  await settingsReadyPromise; // Ensure settings & custom names are loaded
   if (!settings.enabled || !settings.autoGroup) return;
   if (!tab.url || tab.pinned) return;
 
@@ -278,14 +288,14 @@ async function groupTab(tab, force = false) {
 
           const color = await getSmartColor(tab.windowId, tab.index);
 
-          // Suppress rename detection for programmatic title set
-          suppressRenameDetection = true;
+          // Track title to avoid false rename detection
+          const title = getDisplayName(key);
+          programmaticTitles.set(groupId, title);
           await browser.tabGroups.update(groupId, {
-            title: getDisplayName(key),
+            title: title,
             color: color,
             collapsed: false
           });
-          suppressRenameDetection = false;
 
           // Cache the new group
           groupCache.set(lockKey, groupId);
@@ -308,6 +318,7 @@ async function groupTab(tab, force = false) {
  * @param {boolean} force - If true, regroup all tabs ignoring existing groups
  */
 async function groupAllTabsInWindow(windowId, force = false) {
+  await settingsReadyPromise; // Ensure settings & custom names are loaded
   if (!settings.enabled) return;
 
   const tabs = await browser.tabs.query({ windowId });
@@ -349,14 +360,14 @@ async function groupAllTabsInWindow(windowId, force = false) {
         const firstTabIndex = keyTabs[0].index;
         const color = await getSmartColor(windowId, firstTabIndex);
 
-        // Suppress rename detection for programmatic title set
-        suppressRenameDetection = true;
+        // Track title to avoid false rename detection
+        const title = getDisplayName(key);
+        programmaticTitles.set(groupId, title);
         await browser.tabGroups.update(groupId, {
-          title: getDisplayName(key),
+          title: title,
           color: color,
           collapsed: settings.collapseGroups
         });
-        suppressRenameDetection = false;
 
         const cacheKey = `${windowId}-${key}`;
         groupCache.set(cacheKey, groupId);
@@ -400,34 +411,30 @@ async function ungroupAllTabs() {
  */
 async function refreshGroupNames() {
   const windows = await browser.windows.getAll({ windowTypes: ['normal'] });
-  suppressRenameDetection = true;
-  try {
-    for (const win of windows) {
-      const groups = await browser.tabGroups.query({ windowId: win.id });
-      const tabs = await browser.tabs.query({ windowId: win.id });
+  for (const win of windows) {
+    const groups = await browser.tabGroups.query({ windowId: win.id });
+    const tabs = await browser.tabs.query({ windowId: win.id });
 
-      for (const group of groups) {
-        // Try in-memory map first, otherwise derive key from tabs in the group
-        let key = groupIdToKey.get(group.id);
-        if (!key) {
-          const groupTab = tabs.find(t => t.groupId === group.id && t.url);
-          if (groupTab) {
-            key = getGroupingKey(groupTab.url);
-            if (key) {
-              groupIdToKey.set(group.id, key);
-            }
-          }
-        }
-        if (key) {
-          const newTitle = getDisplayName(key);
-          if (group.title !== newTitle) {
-            await browser.tabGroups.update(group.id, { title: newTitle });
+    for (const group of groups) {
+      // Try in-memory map first, otherwise derive key from tabs in the group
+      let key = groupIdToKey.get(group.id);
+      if (!key) {
+        const groupTab = tabs.find(t => t.groupId === group.id && t.url);
+        if (groupTab) {
+          key = getGroupingKey(groupTab.url);
+          if (key) {
+            groupIdToKey.set(group.id, key);
           }
         }
       }
+      if (key) {
+        const newTitle = getDisplayName(key);
+        if (group.title !== newTitle) {
+          programmaticTitles.set(group.id, newTitle);
+          await browser.tabGroups.update(group.id, { title: newTitle });
+        }
+      }
     }
-  } finally {
-    suppressRenameDetection = false;
   }
 }
 
@@ -523,31 +530,36 @@ browser.tabs.onMoved.addListener((tabId, moveInfo) => {
   }, 300);
 });
 
-// Flag to suppress rename detection when we're setting the title programmatically
-let suppressRenameDetection = false;
-
 // Group updated - detect user renames and check colors
 browser.tabGroups.onUpdated.addListener((group) => {
-  // Detect user rename: if we know the key for this group, and the title
-  // is different from both the custom name and the default name, it's a rename
-  if (!suppressRenameDetection && group.title !== undefined) {
-    const key = groupIdToKey.get(group.id);
-    if (key) {
-      const defaultName = getDefaultDisplayName(key);
-      const currentCustom = customNames[key];
-      const expectedName = currentCustom || defaultName;
+  // Detect user rename — but skip if we set this title ourselves
+  if (group.title !== undefined) {
+    // Check if this was a programmatic title change we made
+    const programmaticTitle = programmaticTitles.get(group.id);
+    if (programmaticTitle !== undefined && group.title === programmaticTitle) {
+      // This is our own update, ignore it and clean up
+      programmaticTitles.delete(group.id);
+    } else {
+      // Not our update — could be a user rename
+      programmaticTitles.delete(group.id); // Clean up stale entry if any
+      const key = groupIdToKey.get(group.id);
+      if (key) {
+        const defaultName = getDefaultDisplayName(key);
+        const currentCustom = customNames[key];
+        const expectedName = currentCustom || defaultName;
 
-      // If the title changed to something different, the user renamed it
-      if (group.title !== expectedName && group.title !== defaultName) {
-        customNames[key] = group.title;
-        saveCustomNames();
-        console.log(`Custom name saved: "${key}" → "${group.title}"`);
-      }
-      // If the user renamed it back to the default name, remove the custom name
-      else if (group.title === defaultName && currentCustom) {
-        delete customNames[key];
-        saveCustomNames();
-        console.log(`Custom name cleared for "${key}" (reverted to default)`);
+        // If the title changed to something different, the user renamed it
+        if (group.title !== expectedName && group.title !== defaultName) {
+          customNames[key] = group.title;
+          saveCustomNames();
+          console.log(`Custom name saved: "${key}" → "${group.title}"`);
+        }
+        // If the user renamed it back to the default name, remove the custom name
+        else if (group.title === defaultName && currentCustom) {
+          delete customNames[key];
+          saveCustomNames();
+          console.log(`Custom name cleared for "${key}" (reverted to default)`);
+        }
       }
     }
   }
