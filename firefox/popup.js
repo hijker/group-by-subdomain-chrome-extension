@@ -75,9 +75,20 @@ async function loadCustomNamesCount() {
     valueSpan.className = 'custom-name-value';
     valueSpan.textContent = name;
 
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'custom-name-delete';
+    deleteBtn.textContent = '×';
+    deleteBtn.title = `Remove custom name for ${key}`;
+    deleteBtn.addEventListener('click', async () => {
+      await browser.runtime.sendMessage({ action: 'deleteCustomName', key });
+      await loadCustomNamesCount();
+      showStatus('Custom name removed', 'success');
+    });
+
     row.appendChild(keySpan);
     row.appendChild(arrow);
     row.appendChild(valueSpan);
+    row.appendChild(deleteBtn);
     customNamesListEl.appendChild(row);
   }
 }

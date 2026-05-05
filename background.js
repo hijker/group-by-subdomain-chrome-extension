@@ -44,6 +44,15 @@ async function loadSettings() {
   }
   if (stored.customNames) {
     customNames = stored.customNames;
+    // Clean up any empty/invalid entries from previous bugs
+    let cleaned = false;
+    for (const key of Object.keys(customNames)) {
+      if (!customNames[key]) {
+        delete customNames[key];
+        cleaned = true;
+      }
+    }
+    if (cleaned) saveCustomNames();
   }
   settingsReady();
 }
@@ -724,7 +733,8 @@ chrome.tabGroups.onUpdated.addListener(async (group) => {
     ]);
 
     // If the title is NOT one of ours, the user renamed it
-    if (!ourNames.has(group.title)) {
+    // (skip empty titles — groups start with "" before we set the real title)
+    if (!ourNames.has(group.title) && group.title !== '') {
       if (customNames[key] !== group.title) { // Avoid redundant saves
         customNames[key] = group.title;
         saveCustomNames();
@@ -760,6 +770,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   } else if (message.action === 'getCustomNames') {
     sendResponse(customNames);
+  } else if (message.action === 'deleteCustomName') {
+    delete customNames[message.key];
+    saveCustomNames().then(() => sendResponse({ success: true }));
+    return true;
   } else if (message.action === 'resetCustomNames') {
     resetCustomNames().then(() => sendResponse({ success: true }));
     return true;
