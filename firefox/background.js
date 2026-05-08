@@ -283,21 +283,26 @@ async function findOrCreateGroup(key, windowId) {
     }
   }
 
-  // Look for existing group with matching title
-  // Check all possible truncation levels (full, 3-char, 1-char) and both custom and default names
+  // Match groups by actual grouping key (derived from tabs), not by displayed title.
+  // This prevents collisions when truncation makes different keys look identical
+  // (e.g., "confluence" and "concord" both become "con" with 3-char truncation).
   const groups = await browser.tabGroups.query({ windowId });
-  const fullDisplay = getFullDisplayName(key);
-  const fullDefault = getFullDefaultDisplayName(key);
-  const possibleTitles = new Set([
-    fullDisplay, fullDefault,
-    truncateName(fullDisplay, 3), truncateName(fullDefault, 3),
-    truncateName(fullDisplay, 1), truncateName(fullDefault, 1)
-  ]);
+  const tabs = await browser.tabs.query({ windowId });
 
   for (const group of groups) {
-    if (possibleTitles.has(group.title)) {
+    let mappedKey = groupIdToKey.get(group.id);
+
+    if (!mappedKey) {
+      // Derive key from first tab in this group
+      const groupTab = tabs.find(t => t.groupId === group.id && t.url);
+      if (groupTab) {
+        mappedKey = getGroupingKey(groupTab.url);
+        if (mappedKey) groupIdToKey.set(group.id, mappedKey);
+      }
+    }
+
+    if (mappedKey === key) {
       groupCache.set(cacheKey, group.id);
-      groupIdToKey.set(group.id, key);
       return group.id;
     }
   }
